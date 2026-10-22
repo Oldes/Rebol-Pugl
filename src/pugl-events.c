@@ -45,8 +45,17 @@ PuglStatus Pugl_On_Event(PuglView *view, const PuglEvent *event) {
 		Pugl_Draw(ctx, view);
 		return PUGL_SUCCESS;
 
-	case PUGL_MOTION:
 	case PUGL_CONFIGURE:
+		// The image is centered, so a new size moves it - and the OS only
+		// asks for the damaged part to be redrawn (on X11 a window which
+		// shrinks gets no expose at all). The whole view is redrawn
+		// instead; from within the handler the expose follows at the end
+		// of this same loop iteration - and during a live resize on
+		// Windows, inside the OS's own modal loop, where nothing of ours
+		// is pumping.
+		puglObscureView(view);
+		// fall through - queued, and collapsed like a move
+	case PUGL_MOTION:
 		// Consecutive moves (or resizes) of the same view collapse into
 		// the latest one. Only when nothing came in between, so the order
 		// of events is never changed.

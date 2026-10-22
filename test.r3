@@ -122,7 +122,7 @@ print as-yellow "^/== An image"
 
 ;; The view keeps a REFERENCE to the image, not a copy - so drawing into
 ;; `pic` and calling `redraw` is all it takes to change what is on screen.
-;; It is drawn at its own size, in device pixels, from the top-left corner.
+;; It is drawn at its own size, in device pixels, centered in the view.
 pic: make image! 256x256
 
 paint: function ["Fills the image with a gradient" img [image!] shift [integer!]][
@@ -149,13 +149,33 @@ shown: none
 print ["a string refused:" error? try [view/image: "x"]]
 print ["redraw:          " redraw view "(expected true)"]
 
-;; WATCH: a gradient, black at the top-left, red to the right, green
-;; downwards. It goes away and comes back.
+;; Where it lands: half the spare room on each side, in whole pixels.
+;; Pixels cannot be read back from the screen, so this prints where the
+;; image's corner should be and the scene below shows it.
+image-at: func [/local d][
+	d: view/size - pic/size
+	;; truncated, as C's integer division does it - also when negative
+	as-pair to integer! d/x / 2  to integer! d/y / 2
+]
+print ["view size:       " view/size]
+print ["image corner at: " image-at "(centered)"]
+
+;; WATCH: a gradient in the middle of the view, black at its top-left, red
+;; to the right, green downwards, with an equal black border left and right,
+;; and top and bottom. It goes away and comes back.
 wait 0.5
 view/image: none
 print ["removed:         " mold view/image "(expected none)"]
 wait 0.5
 view/image: pic
+
+;; WATCH: the image stays centered as the view changes size - smaller than
+;; the image too, where it is cropped equally on both sides.
+foreach size [400x300 300x400 200x150 480x320] [
+	view/size: size
+	wait 0.4
+	print ["view size:       " pad view/size 9 "image corner at:" image-at]
+]
 
 ;;=============================================================================
 print as-yellow "^/== Events"
@@ -165,6 +185,9 @@ print {
 Move the mouse over the view, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
 A left click repaints the image in a new colour.
+Resize the view by dragging its edge - the image stays centered WHILE
+dragging, shrinking as well as growing, with no stale copy left behind.
+A click on it is reported with its position on the image too.
 ESCAPE or the close button ends the test.
 }
 
@@ -173,7 +196,7 @@ ESCAPE or the close button ends the test.
 last-move: 0x0
 pressed: none   ;; the button between its `down` and its `up`
 
-report: func [event /local type position d][
+report: func [event /local type position d on-image][
 	type:     event/type
 	position: event/offset
 
@@ -207,9 +230,13 @@ report: func [event /local type position d][
 		]
 	]
 
-	;; A resize carries the new size, which the view reports back.
-	if all [type = 'resize  position <> view/size] [
-		print as-red ["!! resize to" position "but size is" view/size]
+	;; A resize carries the new size, which the view reports back - and
+	;; moves the centered image.
+	if type = 'resize [
+		if position <> view/size [
+			print as-red ["!! resize to" position "but size is" view/size]
+		]
+		print ["  image corner now at" image-at]
 	]
 
 	;; Escape ends it; `do-events` sees the view closed and returns.
@@ -221,6 +248,17 @@ report: func [event /local type position d][
 	;; Drawing into the very image the view was given, then asking for it
 	;; to be shown. Nothing is copied.
 	if type = 'down [
+		;; The image is centered, so its own coordinates are the event's
+		;; minus where its corner is.
+		on-image: position - image-at
+		either all [
+			on-image/x >= 0  on-image/y >= 0
+			on-image/x < pic/size/x  on-image/y < pic/size/y
+		][
+			print ["  on the image at" on-image]
+		][
+			print ["  outside the image"]
+		]
 		paint pic random 256
 		redraw view
 	]

@@ -45,8 +45,10 @@ PuglStatus Pugl_Setup_Backend(PuglView *view)
 **
 **  The image! layout is B G R A in memory with straight alpha, 255
 **  opaque, which GL takes as it is: GL_BGRA / GL_UNSIGNED_BYTE and
-**  ordinary alpha blending. Drawn 1:1 in device pixels, from the
-**  top-left corner; whatever it does not cover is cleared to black.
+**  ordinary alpha blending. Drawn 1:1 in device pixels, centered in the
+**  view; whatever it does not cover is cleared to black. The offset is
+**  a whole number of pixels, so the image stays sharp, and an image
+**  larger than the view is cropped equally on both sides.
 **
 **  The texture is not deleted when the view closes: it belongs to the
 **  view's GL context, which takes its textures with it.
@@ -56,6 +58,7 @@ void Pugl_Draw(PUGLVIEWCTX *pv, PuglView *view)
 	PuglArea area = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
 	REBSER  *img  = (REBSER*)pv->image;
 	REBINT   w, h;
+	float    x, y;
 	GLuint   tex;
 
 	glViewport(0, 0, area.width, area.height);
@@ -106,11 +109,15 @@ void Pugl_Draw(PUGLVIEWCTX *pv, PuglView *view)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
+	// Centered; integer division keeps it on whole pixels.
+	x = (float)(((REBINT)area.width  - w) / 2);
+	y = (float)(((REBINT)area.height - h) / 2);
+
 	glBegin(GL_QUADS);
-	glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f,     0.0f);
-	glTexCoord2f(1.0f, 0.0f); glVertex2f((float)w, 0.0f);
-	glTexCoord2f(1.0f, 1.0f); glVertex2f((float)w, (float)h);
-	glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f,     (float)h);
+	glTexCoord2f(0.0f, 0.0f); glVertex2f(x,            y);
+	glTexCoord2f(1.0f, 0.0f); glVertex2f(x + (float)w, y);
+	glTexCoord2f(1.0f, 1.0f); glVertex2f(x + (float)w, y + (float)h);
+	glTexCoord2f(0.0f, 1.0f); glVertex2f(x,            y + (float)h);
 	glEnd();
 
 	glDisable(GL_BLEND);

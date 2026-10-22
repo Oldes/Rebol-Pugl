@@ -70,7 +70,7 @@ handles: [
 		id       integer!  none      "Native view handle (HWND / NSView* / X11 Window) as an integer"
 		visible? logic!    none      "Whether the view is currently visible"
 		open?    logic!    none      "False once the view has been closed"
-		image    image!    [image! none!] "Image shown at its own size from the top-left corner; none for nothing. Kept by reference - draw into it and call `redraw`"
+		image    image!    [image! none!] "Image shown at its own size, centered in the view; none for nothing. Kept by reference - draw into it and call `redraw`"
 	]
 ]
 
