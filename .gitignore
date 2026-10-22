@@ -1,0 +1,16 @@
+/*
+!/.gitignore
+!/.github
+!/.editorconfig
+!/rebol
+!/src
+!/test
+!/Rebol-GUI.nest
+!/Entitlements.plist
+!/ci-test.r3
+!/test.r3
+!/*.md
+*/gen-*
+!/make-*.r3
+!/icon.png
+.DS_Store
