@@ -5,7 +5,7 @@
 !/rebol
 !/src
 !/test
-!/Rebol-GUI.nest
+!/*.nest
 !/Entitlements.plist
 !/ci-test.r3
 !/test.r3

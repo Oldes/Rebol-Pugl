@@ -69,6 +69,8 @@ print ["id after:        " spare/id "(expected 0)"]
 print ["molded:          " spare "(expected closed)"]
 print ["closing twice:   " close-view spare "(expected true)"]
 print ["show refused:    " error? try [show-view spare]]
+print ["redraw refused:  " error? try [redraw spare]]
+print ["image after:     " mold spare/image "(expected none)"]
 print ["set refused:     " error? try [spare/title: "x"]]
 release spare
 
@@ -115,12 +117,54 @@ print ["hidden again:    " not view/visible?]
 show-view view
 
 ;;=============================================================================
+print as-yellow "^/== An image"
+;;=============================================================================
+
+;; The view keeps a REFERENCE to the image, not a copy - so drawing into
+;; `pic` and calling `redraw` is all it takes to change what is on screen.
+;; It is drawn at its own size, in device pixels, from the top-left corner.
+pic: make image! 256x256
+
+paint: function ["Fills the image with a gradient" img [image!] shift [integer!]][
+	size: img/size
+	repeat y size/y [
+		repeat x size/x [
+			img/(as-pair x y): to tuple! reduce [
+				to integer! 255 * x / size/x
+				to integer! 255 * y / size/y
+				shift % 256
+			]
+		]
+	]
+]
+paint pic 0
+
+print ["image before:    " mold view/image "(expected none)"]
+view/image: pic
+print ["the same series: " same? view/image pic "(expected true)"]
+;; NEVER mold an image! into the console - only its type and size.
+shown: view/image
+print ["image is:        " type? shown "size:" shown/size "(expected 256x256)"]
+shown: none
+print ["a string refused:" error? try [view/image: "x"]]
+print ["redraw:          " redraw view "(expected true)"]
+
+;; WATCH: a gradient, black at the top-left, red to the right, green
+;; downwards. It goes away and comes back.
+wait 0.5
+view/image: none
+print ["removed:         " mold view/image "(expected none)"]
+wait 0.5
+view/image: pic
+
+;;=============================================================================
 print as-yellow "^/== Events"
 ;;=============================================================================
 
 print {
 Move the mouse over the view, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
+A left click repaints the image in a new colour.
 ESCAPE or the close button ends the test.
 }
 
@@ -174,6 +218,13 @@ report: func [event /local type position d][
 		close-view view
 	]
 
+	;; Drawing into the very image the view was given, then asking for it
+	;; to be shown. Nothing is copied.
+	if type = 'down [
+		paint pic random 256
+		redraw view
+	]
+
 	if type = 'close [print ["Closing view:" event/source]]
 
 	print [
@@ -193,6 +244,8 @@ do-events view :report
 
 print ["^/view closed - open?:" view/open? "(expected false)"]
 print ["molded:" view "(expected closed)"]
+print ["image after close:" mold view/image "(expected none)"]
+print ["the image survives:" type? pic pic/size]
 release view
 print ["released:" view]
 

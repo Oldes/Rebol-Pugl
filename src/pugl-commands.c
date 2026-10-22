@@ -54,6 +54,40 @@ static REBOOL Set_View_Title(PuglView *view, REBSER *ser, REBCNT index)
 	return TRUE;
 }
 
+/***********************************************************************
+**  Sets the image a view shows, or clears it with NULL.
+**
+**  The image! value is kept in a one-slot block in hob->series, which
+**  is what the GC marks - so the image lives as long as the view shows
+**  it. `pv->image` is the same series, for the expose handler to read
+**  without calling into the interpreter.
+**
+**  The block is stored in hob->series BEFORE the value goes in, so a
+**  collection cannot take it away while it is being filled.
+***********************************************************************/
+static REBOOL Set_View_Image(PUGLVIEWCTX *pv, RXIARG *arg)
+{
+	REBHOB *hob = pv->hob;
+	RXIARG  none;
+
+	if (!hob->series) {
+		REBSER *blk = (REBSER*)RL_MAKE_BLOCK(1);
+		if (!blk) return FALSE;
+		hob->series = blk;
+	}
+	if (arg) {
+		RL_SET_VALUE(hob->series, 0, *arg, RXT_IMAGE);
+		pv->image = arg->image;
+	} else {
+		CLEARS(&none);
+		RL_SET_VALUE(hob->series, 0, none, RXT_NONE);
+		pv->image = NULL;
+	}
+	pv->dirty = TRUE;
+	if (pv->view) puglObscureView((PuglView*)pv->view);
+	return TRUE;
+}
+
 static void Remember_Frame(PUGLVIEWCTX *pv)
 {
 	PuglView *view = (PuglView*)pv->view;
@@ -89,7 +123,15 @@ static void Close_View(PUGLVIEWCTX *pv)
 	if (Pugl_Views > 0) Pugl_Views--;
 
 	Pugl_Purge_Events(pv);
-	if (pv->hob) pv->hob->flags &= ~HANDLE_CONTEXT_LOCKED;
+
+	// A closed view shows nothing, so it lets go of its image; the
+	// texture went with the GL context.
+	pv->image   = NULL;
+	pv->texture = 0;
+	if (pv->hob) {
+		pv->hob->series = NULL;
+		pv->hob->flags &= ~HANDLE_CONTEXT_LOCKED;
+	}
 }
 
 void Pugl_Close_All_Views(void)
@@ -247,7 +289,7 @@ COMMAND cmd_pugl_open_view(RXIFRM *frm, void *ctx)
 		RETURN_ERROR(ERR_NO_VIEW);
 	}
 	puglSetHandle(view, pv);
-	puglSetBackend(view, puglStubBackend());
+	Pugl_Setup_Backend(view);
 	puglSetEventFunc(view, Pugl_On_Event);
 	puglSetSizeHint(view, PUGL_DEFAULT_SIZE, (unsigned)w, (unsigned)h);
 	puglSetViewHint(view, PUGL_RESIZABLE, RXA_REF(frm, 7) ? PUGL_FALSE : PUGL_TRUE);
@@ -347,6 +389,25 @@ COMMAND cmd_pugl_poll_events(RXIFRM *frm, void *ctx)
 }
 
 
+/***********************************************************************
+**  redraw view [handle!]
+**
+**  Uploads the view's image again and shows it. Needed after drawing
+**  into the image - the view only holds a reference, and has no way of
+**  knowing the pixels changed. One main loop iteration is run, so the
+**  new pixels are normally on screen when this returns.
+***********************************************************************/
+COMMAND cmd_pugl_redraw(RXIFRM *frm, void *ctx)
+{
+	PUGLVIEWCTX *pv = Frm_View(frm, 1);
+	if (!pv || !pv->view) RETURN_ERROR(ERR_INVALID_HANDLE);
+	pv->dirty = TRUE;
+	puglObscureView((PuglView*)pv->view);
+	puglUpdate(Pugl_World, 0.0);
+	return RXR_TRUE;
+}
+
+
 //== view handle callbacks ====================================================
 
 // Reached through an explicit `release`, or at shutdown - an open view is
@@ -426,6 +487,18 @@ int PuglView_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_LOGIC;
 		break;
 
+	// The very series it was given. Filled in as an image and nothing
+	// else: an image! carries its dimensions where a series has its index.
+	case W_PUGL_ARG_IMAGE: {
+		REBSER *img = (REBSER*)pv->image;
+		if (!img) { *type = RXT_NONE; break; }
+		CLEARS(arg);
+		arg->image  = img;
+		arg->width  = (int)IMG_WIDE(img);
+		arg->height = (int)IMG_HIGH(img);
+		*type = RXT_IMAGE;
+		break; }
+
 	default:
 		return PE_BAD_SELECT;
 	}
@@ -460,6 +533,16 @@ int PuglView_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (puglSetPositionHint(view, PUGL_CURRENT_POSITION,
 		        (int)arg->pair.x, (int)arg->pair.y) != PUGL_SUCCESS)
 			return PE_BAD_SET;
+		break;
+
+	case W_PUGL_ARG_IMAGE:
+		if (*type == RXT_NONE) {
+			if (!Set_View_Image(pv, NULL)) return PE_BAD_SET;
+			break;
+		}
+		if (*type != RXT_IMAGE) return PE_BAD_SET_TYPE;
+		if (!arg->image) return PE_BAD_SET;
+		if (!Set_View_Image(pv, arg)) return PE_BAD_SET;
 		break;
 
 	default:

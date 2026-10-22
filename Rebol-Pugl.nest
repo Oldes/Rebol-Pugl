@@ -1,0 +1,194 @@
+;-    .-.                                                                       
+;-   /'v'\   SISKIN-Builder project file                                        
+;-  (/uOu\)  https://github.com/Siskin-framework/Builder/                       
+;-===="="=======================================================================
+
+github: lv2/pugl
+
+version: 0.0.1
+
+include:  %pugl/include/
+
+compiler: clang
+arch:     x64
+optimize: 2
+
+define: USE_TRACES
+
+;- options common for all Rebol extensions ----------------------
+#if Windows? [
+	define: _CRT_SECURE_NO_WARNINGS
+	define: _USE_MATH_DEFINES
+	define: TO_WINDOWS
+	upx:    on
+]
+#if Linux? [
+	compiler: gcc
+]
+
+target-x86: [
+	arch: x86
+]
+target-x64: [
+	arch: x64
+	defines: [
+		_FILE_OFFSET_BITS=64
+		__LP64__       ; has long (integer) 64 bits
+	]
+	#if macOS?   [ flag: "-arch x86_64" ]
+]
+target-arm64: [
+	arch: arm64
+	#if Linux? [
+		flag: "-arch arm64"
+	]
+	#if macOS? [
+		flag: "-target arm64-apple-darwin"
+	]
+	define: _FILE_OFFSET_BITS=64
+	define: __LP64__   ; has long (integer) 64 bits
+	define: __arm64__
+]
+target-armv7: [
+	arch: armv7
+	flag: "-march=armv7"
+]
+;----------------------------------------------------------------
+
+;- pugl (statically embedded) -----------------------------------
+define: PUGL_STATIC
+define: PUGL_INTERNAL
+
+files: [
+	%pugl/src/common.c
+	%pugl/src/internal.c
+]
+
+#if Windows? [
+	define: WINVER=0x0500
+	define: _WIN32_WINNT=0x0500
+	define: WIN32_LEAN_AND_MEAN
+	define: NOGDICAPMASKS
+	define: NOSYSMETRICS
+	define: NOKEYSTATES
+	define: OEMRESOURCE
+	define: NOATOM
+	define: NOCOLOR
+	define: NODRAWTEXT
+	define: NOKERNEL
+	define: NOMB
+	define: NOMEMMGR
+	define: NOMETAFILE
+	define: NOMINMAX
+	define: NOOPENFILE
+	define: NOSCROLL
+	define: NOSERVICE
+	define: NOSOUND
+	define: NOWH
+	define: NOCOMM
+	define: NOKANJI
+	define: NOHELP
+	define: NOPROFILER
+	define: NODEFERWINDOWPOS
+	define: NOMCX
+	define: UNICODE
+	define: _UNICODE
+	files: [%pugl/src/win.c]
+	libraries: [%dwmapi %gdi32 %shell32 %shlwapi %user32]
+]
+
+#if Linux? [
+	cflags: -fPIC
+	define: _POSIX_C_SOURCE=200809L
+	define: USE_XCURSOR=1
+	define: USE_XRANDR=1
+	define: USE_XSYNC=1
+	files: [%pugl/src/x11.c]
+	libraries: [%X11 %Xcursor %Xrandr %Xext %dl %m]
+]
+
+#if macOS? [
+	sign: on
+	flag: "-mmacos-version-min=10.9"
+	files: [%pugl/src/mac.m]
+	frameworks: [Cocoa AppKit Foundation CoreVideo]
+]
+
+;- generate main extension header --------------------------------
+make-extension: [
+	do %make-extension.r3 [%src/pugl.reb]
+	define: REB_EXT
+	files: [
+		%src/gen-pugl.c
+		%src/pugl.c
+		%src/pugl-events.c
+		%src/pugl-commands.c
+		%src/pugl-draw.c
+	]
+]
+
+;- pugl backends -------------------------------------------------
+backend-stub: [
+	#if Windows? [ files: [%pugl/src/win_stub.c] ]
+	#if Linux?   [ files: [%pugl/src/x11_stub.c] ]
+	#if macOS?   [ files: [%pugl/src/mac_stub.m] ]
+]
+backend-gl: [
+	#if Windows? [ files: [%pugl/src/win_gl.c] libraries: [%opengl32] ]
+	#if Linux?   [ files: [%pugl/src/x11_gl.c] libraries: [%GL %m] ]
+	#if macOS?   [
+		files: [%pugl/src/mac_gl.m]
+		frameworks: [OpenGL]
+		define: GL_SILENCE_DEPRECATION
+	]
+]
+example: [
+	include: %pugl/subprojects/puglutil/include/  ; <-- verify
+	#if Windows? [ define: _CRT_NONSTDC_NO_WARNINGS ]
+]
+;----------------------------------------------------------------
+
+eggs: [
+	"Rebol Pugl extension: x64" [
+		name: %pugl-x64
+		flag: shared
+		:backend-gl
+		:target-x64
+		:make-extension
+	]
+	"Example: pugl_print_events (stub)" [
+		name: %pugl_print_events
+		files: [%pugl/examples/pugl_print_events.c]
+		:backend-stub
+		:example
+		:target-x64
+	]
+	"Example: pugl_window_demo (GL)" [
+		name: %pugl_window_demo
+		files: [%pugl/examples/pugl_window_demo.c]
+		:backend-gl
+		:example
+		:target-x64
+	]
+	"Example: pugl_cursor_demo (GL)" [
+		name: %pugl_cursor_demo
+		files: [%pugl/examples/pugl_cursor_demo.c]
+		:backend-gl
+		:example
+		:target-x64
+	]
+	"Example: pugl_embed_demo (GL)" [
+		name: %pugl_embed_demo
+		files: [%pugl/examples/pugl_embed_demo.c]
+		:backend-gl
+		:example
+		:target-x64
+	]
+	"Example: pugl_clipboard_demo (GL)" [
+		name: %pugl_clipboard_demo
+		files: [%pugl/examples/pugl_clipboard_demo.c]
+		:backend-gl
+		:example
+		:target-x64
+	]
+]

@@ -39,6 +39,12 @@ PuglStatus Pugl_On_Event(PuglView *view, const PuglEvent *event) {
 	if (!ctx) return PUGL_SUCCESS;
 
 	switch (event->type) {
+	case PUGL_EXPOSE:
+		// Drawn here and now: the GL context is current only while this
+		// event is being handled. Reads the image, allocates nothing.
+		Pugl_Draw(ctx, view);
+		return PUGL_SUCCESS;
+
 	case PUGL_MOTION:
 	case PUGL_CONFIGURE:
 		// Consecutive moves (or resizes) of the same view collapse into

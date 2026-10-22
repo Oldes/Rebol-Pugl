@@ -8,7 +8,7 @@ REBOL [
 	Options: [delay]
 	Exports: [
 		open-view close-view show-view hide-view
-		poll-events do-events
+		poll-events do-events redraw
 	]
 	Purpose: {
 		Native top-level views (windows) through the Pugl library.
@@ -20,6 +20,9 @@ REBOL [
 		The extension registers a device with RDO_AUTO_POLL, so the host
 		runs Pugl's main loop iteration from inside WAIT whenever a view
 		is open.
+
+		Views draw with OpenGL. A view shows an image! - by reference, so
+		drawing into it and calling `redraw` is all it takes to animate.
 	}
 ]
 
@@ -43,6 +46,14 @@ typedef struct Pugl_View_Context {
 	                // closed before the world is freed
 	REBINT  x, y;   // position and size last reported - Pugl sends one
 	REBINT  w, h;   // `configure` for both, Rebol has `offset` and `resize`
+
+	// What the view shows. `image` is the image! series itself, read at
+	// every expose; what keeps it alive is the block in hob->series, which
+	// the GC marks. NULL for nothing.
+	void   *image;
+	REBCNT  texture;      // GL texture name in the view's context, 0 before the first draw
+	REBINT  tex_w, tex_h; // the size it was made with
+	REBCNT  dirty;        // the pixels must be uploaded again
 } PUGLVIEWCTX;
 }
 
@@ -59,6 +70,7 @@ handles: [
 		id       integer!  none      "Native view handle (HWND / NSView* / X11 Window) as an integer"
 		visible? logic!    none      "Whether the view is currently visible"
 		open?    logic!    none      "False once the view has been closed"
+		image    image!    [image! none!] "Image shown at its own size from the top-left corner; none for nothing. Kept by reference - draw into it and call `redraw`"
 	]
 ]
 
@@ -77,6 +89,7 @@ commands: [
 	show-view:   ["Makes the view visible" view [handle!]]
 	hide-view:   ["Hides the view without destroying it" view [handle!]]
 	poll-events: ["Runs one Pugl main loop iteration and returns the collected events"]
+	redraw:      ["Shows the view's image again - use after drawing into it" view [handle!]]
 ]
 
 ;; ---------------------------------------------------------------------------
