@@ -1,8 +1,6 @@
-[![Rebol-Pugl CI](https://github.com/Oldes/Rebol-Pugl/actions/workflows/main.yml/badge.svg)](https://github.com/Oldes/Rebol-Pugl/actions/workflows/main.yml)
-
 # Rebol/Pugl
 
-[Pugl](https://github.com/lv2/pugl) extension for [Rebol3](https://github.com/Oldes/Rebol3) (version 3.20.5 and higher)
+[Pugl](https://github.com/lv2/pugl) extension for [Rebol3](https://github.com/Oldes/Rebol3) (version 3.20.10 and higher)
 
 Pugl (PlUgin Graphics Library) is a minimal, portable API for embeddable GUIs. It supports
 Windows (Win32), macOS (Cocoa) and Linux (X11), with stub (native) and OpenGL drawing backends.
