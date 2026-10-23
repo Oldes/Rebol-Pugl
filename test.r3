@@ -71,6 +71,8 @@ print ["closing twice:   " close-view spare "(expected true)"]
 print ["show refused:    " error? try [show-view spare]]
 print ["redraw refused:  " error? try [redraw spare]]
 print ["image after:     " mold spare/image "(expected none)"]
+print ["icon after:      " mold spare/icon "(expected none)"]
+print ["icon refused:    " error? try [spare/icon: make image! 16x16]]
 print ["set refused:     " error? try [spare/title: "x"]]
 release spare
 
@@ -176,6 +178,51 @@ foreach size [400x300 300x400 200x150 480x320] [
 	wait 0.4
 	print ["view size:       " pad view/size 9 "image corner at:" image-at]
 ]
+
+;;=============================================================================
+print as-yellow "^/== An icon"
+;;=============================================================================
+
+;; The platform gets a COPY of the pixels when the icon is set, so drawing
+;; into the image afterwards changes nothing until it is set again. On
+;; macOS it is the application's Dock icon, which the last view set wins.
+;; Any size: Windows scales it down to its two icon sizes itself.
+ico: make image! 64x64
+paint ico 200
+
+print ["icon before:     " mold view/icon "(expected none)"]
+view/icon: ico
+print ["the same series: " same? view/icon ico "(expected true)"]
+shown: view/icon
+print ["icon is:         " type? shown "size:" shown/size "(expected 64x64)"]
+shown: none
+print ["a string refused:" error? try [view/icon: "x"]]
+print ["an empty image:  " error? try [view/icon: make image! 0x0]]
+
+;; WATCH: the title bar and the taskbar (on macOS the Dock) show a red
+;; and green gradient with a blue tint. It goes away and comes back.
+wait 0.5
+view/icon: none
+print ["removed:         " mold view/icon "(expected none)"]
+wait 0.5
+;; Drawn into AFTER being set - the copy keeps the old colours until the
+;; icon is set again, which is what the second line does.
+view/icon: ico
+paint ico 0
+print ["redrawn image:   " same? view/icon ico "(still the same series)"]
+wait 0.5
+view/icon: ico   ;; WATCH: now without the blue tint
+
+;; A big one, scaled down - 256x256, as an application icon usually is.
+view/icon: pic
+print ["a bigger icon:   " view/icon/size "(expected 256x256)"]
+
+;; A path going on PAST a handle field: the handle's answer is in the
+;; path's scratch cell, and the image getter used to overwrite its own
+;; input there - `view/image/size` crashed the interpreter.
+print ["image/size:      " view/image/size "(expected 256x256)"]
+print ["image/width:     " view/image/width "(expected 256)"]
+print ["image/height:    " view/image/height "(expected 256)"]
 
 ;;=============================================================================
 print as-yellow "^/== Events"

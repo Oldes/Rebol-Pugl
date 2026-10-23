@@ -55,36 +55,91 @@ static REBOOL Set_View_Title(PuglView *view, REBSER *ser, REBCNT index)
 }
 
 /***********************************************************************
+**  The one GC-marked slot of a view handle: a block of two values,
+**
+**      [0] the image! the view shows, or none
+**      [1] the image! its icon was made from, or none
+**
+**  Both exist from the start, so neither depends on which was assigned
+**  first. The block is stored in hob->series BEFORE anything else can
+**  allocate, so a collection cannot take it away while it is filled.
+***********************************************************************/
+#define SLOT_IMAGE 0
+#define SLOT_ICON  1
+
+static REBSER *View_Slots(PUGLVIEWCTX *pv)
+{
+	REBHOB *hob = pv->hob;
+	REBSER *blk;
+	RXIARG  none;
+
+	if (hob->series) return hob->series;
+	blk = (REBSER*)RL_MAKE_BLOCK(2);
+	if (!blk) return NULL;
+	hob->series = blk;
+	CLEARS(&none);
+	RL_SET_VALUE(blk, SLOT_IMAGE, none, RXT_NONE);
+	RL_SET_VALUE(blk, SLOT_ICON,  none, RXT_NONE);
+	return blk;
+}
+
+/***********************************************************************
 **  Sets the image a view shows, or clears it with NULL.
 **
-**  The image! value is kept in a one-slot block in hob->series, which
-**  is what the GC marks - so the image lives as long as the view shows
-**  it. `pv->image` is the same series, for the expose handler to read
-**  without calling into the interpreter.
-**
-**  The block is stored in hob->series BEFORE the value goes in, so a
-**  collection cannot take it away while it is being filled.
+**  Kept in the slot block, which is what the GC marks - so the image
+**  lives as long as the view shows it. `pv->image` is the same series,
+**  for the expose handler to read without calling into the interpreter.
 ***********************************************************************/
 static REBOOL Set_View_Image(PUGLVIEWCTX *pv, RXIARG *arg)
 {
-	REBHOB *hob = pv->hob;
+	REBSER *slots = View_Slots(pv);
 	RXIARG  none;
 
-	if (!hob->series) {
-		REBSER *blk = (REBSER*)RL_MAKE_BLOCK(1);
-		if (!blk) return FALSE;
-		hob->series = blk;
-	}
+	if (!slots) return FALSE;
 	if (arg) {
-		RL_SET_VALUE(hob->series, 0, *arg, RXT_IMAGE);
+		RL_SET_VALUE(slots, SLOT_IMAGE, *arg, RXT_IMAGE);
 		pv->image = arg->image;
 	} else {
 		CLEARS(&none);
-		RL_SET_VALUE(hob->series, 0, none, RXT_NONE);
+		RL_SET_VALUE(slots, SLOT_IMAGE, none, RXT_NONE);
 		pv->image = NULL;
 	}
 	pv->dirty = TRUE;
 	if (pv->view) puglObscureView((PuglView*)pv->view);
+	return TRUE;
+}
+
+/***********************************************************************
+**  Sets the view's icon, or puts the default back with NULL.
+**
+**  The platform gets a COPY of the pixels now - the series may move once
+**  this returns - and the image! itself is kept in the slot only so that
+**  `icon` reads back the very value it was given. Drawing into it
+**  afterwards therefore shows only when it is set again.
+**
+**  The whole image, whatever its index: an image! crossing the ABI has
+**  its dimensions where a series has its index.
+***********************************************************************/
+static REBOOL Set_View_Icon(PUGLVIEWCTX *pv, RXIARG *arg)
+{
+	REBSER *slots = View_Slots(pv);
+	REBSER *img;
+	RXIARG  none;
+
+	if (!slots || !pv->view) return FALSE;
+	if (!arg) {
+		if (!Pugl_Set_Native_Icon((PuglView*)pv->view, pv->icon, NULL, 0, 0)) return FALSE;
+		CLEARS(&none);
+		RL_SET_VALUE(slots, SLOT_ICON, none, RXT_NONE);
+		return TRUE;
+	}
+	img = (REBSER*)arg->image;
+	if (!img || IMG_WIDE(img) == 0 || IMG_HIGH(img) == 0) return FALSE;
+	if (!Pugl_Set_Native_Icon((PuglView*)pv->view, pv->icon,
+	                          (const unsigned char*)IMG_DATA(img),
+	                          (int)IMG_WIDE(img), (int)IMG_HIGH(img)))
+		return FALSE;
+	RL_SET_VALUE(slots, SLOT_ICON, *arg, RXT_IMAGE);
 	return TRUE;
 }
 
@@ -115,6 +170,8 @@ static void Close_View(PUGLVIEWCTX *pv)
 	pv->view = NULL;
 	puglSetHandle(view, NULL);
 	puglFreeView(view);
+	// Only now: the window used them until it was gone.
+	Pugl_Free_Native_Icon(pv->icon);
 
 	for (link = &Views_Head; *link; link = (PUGLVIEWCTX**)&(*link)->next) {
 		if (*link == pv) { *link = (PUGLVIEWCTX*)pv->next; break; }
@@ -124,8 +181,8 @@ static void Close_View(PUGLVIEWCTX *pv)
 
 	Pugl_Purge_Events(pv);
 
-	// A closed view shows nothing, so it lets go of its image; the
-	// texture went with the GL context.
+	// A closed view shows nothing, so it lets go of its image and its
+	// icon; the texture went with the GL context.
 	pv->image   = NULL;
 	pv->texture = 0;
 	if (pv->hob) {
@@ -499,6 +556,23 @@ int PuglView_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_IMAGE;
 		break; }
 
+	// The image! it was given, from the slot - not read back from the
+	// platform, which keeps only its own converted copy.
+	case W_PUGL_ARG_ICON: {
+		RXIARG val;
+		REBSER *img;
+		if (!hob->series || RL_GET_VALUE(hob->series, SLOT_ICON, &val) != RXT_IMAGE) {
+			*type = RXT_NONE;
+			break;
+		}
+		img = (REBSER*)val.image;
+		CLEARS(arg);
+		arg->image  = img;
+		arg->width  = (int)IMG_WIDE(img);
+		arg->height = (int)IMG_HIGH(img);
+		*type = RXT_IMAGE;
+		break; }
+
 	default:
 		return PE_BAD_SELECT;
 	}
@@ -543,6 +617,15 @@ int PuglView_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (*type != RXT_IMAGE) return PE_BAD_SET_TYPE;
 		if (!arg->image) return PE_BAD_SET;
 		if (!Set_View_Image(pv, arg)) return PE_BAD_SET;
+		break;
+
+	case W_PUGL_ARG_ICON:
+		if (*type == RXT_NONE) {
+			if (!Set_View_Icon(pv, NULL)) return PE_BAD_SET;
+			break;
+		}
+		if (*type != RXT_IMAGE) return PE_BAD_SET_TYPE;
+		if (!Set_View_Icon(pv, arg)) return PE_BAD_SET;
 		break;
 
 	default:

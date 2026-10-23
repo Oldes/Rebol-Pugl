@@ -116,7 +116,7 @@ files: [
 
 ;- generate main extension header --------------------------------
 make-extension: [
-	do %make-extension.r3 [%src/pugl.reb]
+	do %make-extension.r3 [%src/pugl.reb --readme]
 	define: REB_EXT
 	files: [
 		%src/gen-pugl.c
@@ -125,6 +125,10 @@ make-extension: [
 		%src/pugl-commands.c
 		%src/pugl-draw.c
 	]
+	;; the window icon - pugl has no API for it
+	#if Windows? [ files: [%src/pugl-icon-win.c] ]
+	#if Linux?   [ files: [%src/pugl-icon-x11.c] ]
+	#if macOS?   [ files: [%src/pugl-icon-mac.m] ]
 ]
 
 ;- pugl backends -------------------------------------------------

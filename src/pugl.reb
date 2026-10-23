@@ -47,6 +47,10 @@ typedef struct Pugl_View_Context {
 	REBINT  x, y;   // position and size last reported - Pugl sends one
 	REBINT  w, h;   // `configure` for both, Rebol has `offset` and `resize`
 
+	// The native icon objects, where a platform keeps any (Windows: the
+	// big and the small HICON). The image! itself is in hob->series.
+	void   *icon[2];
+
 	// What the view shows. `image` is the image! series itself, read at
 	// every expose; what keeps it alive is the block in hob->series, which
 	// the GC marks. NULL for nothing.
@@ -71,6 +75,7 @@ handles: [
 		visible? logic!    none      "Whether the view is currently visible"
 		open?    logic!    none      "False once the view has been closed"
 		image    image!    [image! none!] "Image shown at its own size, centered in the view; none for nothing. Kept by reference - draw into it and call `redraw`"
+		icon     image!    [image! none!] "Icon of the view - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
 	]
 ]
 

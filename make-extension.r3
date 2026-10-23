@@ -288,7 +288,7 @@ build-extension: function [
 	src:  load/header file
 	hdr:  take src
 	spec: construct src
-	?? spec
+	;?? spec
 
 	unless dir [dir: first split-path file]
 
@@ -604,10 +604,12 @@ int $call-name(int cmd, RXIFRM *frm, void *ctx) {
 			rme: build-commands md spec source
 		]
 		readme [
+			? rme
 			unless rme [
 				rme: clean-path rejoin [first split-path clean-path file %../README.md]
 			]
-			either exists? rme [
+			? rme
+			either probe exists? rme [
 				build-readme rme spec source
 			][
 				print ["README not found, skipping:" mold rme]
@@ -634,9 +636,12 @@ if all [
 	src: attempt [to-real-file src]
 ][
 	case [
-		pos: find args "--commands" [build-extension/commands-md src file-after pos]
-		pos: find args "--readme"   [build-extension/readme      src file-after pos]
-		true                        [build-extension src]
+		pos: any [find args '--commands find args "--commands"]
+			[build-extension/commands-md src file-after pos]
+		pos: any [find args '--readme   find args "--readme"  ]
+			[build-extension/readme      src file-after pos]
+		true
+			[build-extension src]
 	]
 ]
 

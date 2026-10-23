@@ -12,6 +12,7 @@
 #define REBOL_PUGL_H
 
 #include <pugl/pugl.h>
+#include "pugl-icon.h"
 
 // pugl.c
 extern PuglWorld *Pugl_World;
