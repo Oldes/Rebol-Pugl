@@ -20,13 +20,13 @@ RL_LIB *RL;
 
 static char *init_block = PUGL_EXT_INIT_CODE;
 
-// Note: the handle type is PUGL-VIEW, so its callbacks are PuglView_*.
+// Note: the handle type is PUGL-WINDOW, so its callbacks are PuglWindow_*.
 // That is a different identifier from Pugl's own `PuglView` typedef.
-REBCNT Handle_PuglView = 0;
+REBCNT Handle_PuglWindow = 0;
 
 // One world for the whole process - every view belongs to it.
 PuglWorld *Pugl_World = NULL;
-REBCNT     Pugl_Views = 0;
+REBCNT     Pugl_Windows = 0;
 
 
 /***********************************************************************
@@ -56,7 +56,7 @@ static DEVICE_CMD Quit_Pugl(REBREQ *dr) {
 // See the note on Poll_Gui in Rebol-GUI.
 static DEVICE_CMD Poll_Pugl(REBREQ *dr) {
 	// Nothing to pump with no view open.
-	if (Pugl_Views == 0 || !Pugl_World) return DR_DONE;
+	if (Pugl_Windows == 0 || !Pugl_World) return DR_DONE;
 	puglUpdate(Pugl_World, 0.0); // never blocks
 	return DR_DONE;
 }
@@ -80,15 +80,15 @@ DEFINE_DEV(Dev_Pugl, "Rebol Pugl device", 1, Pugl_Dev_Cmds, RDC_MAX, 0);
 int Pugl_Init(void) {
 	REBHSP spec;
 
-	spec.size     = sizeof(PUGLVIEWCTX);
+	spec.size     = sizeof(PUGLWIN);
 	spec.flags    = HANDLE_REQUIRES_HOB_ON_FREE;
-	spec.free     = PuglView_free;
-	spec.get_path = PuglView_get_path;
-	spec.set_path = PuglView_set_path;
-	spec.mold     = PuglView_mold;
+	spec.free     = PuglWindow_free;
+	spec.get_path = PuglWindow_get_path;
+	spec.set_path = PuglWindow_set_path;
+	spec.mold     = PuglWindow_mold;
 
-	Handle_PuglView = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-VIEW"), &spec);
-	if (Handle_PuglView == 0) return FALSE;
+	Handle_PuglWindow = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-WINDOW"), &spec);
+	if (Handle_PuglWindow == 0) return FALSE;
 
 	if (!Pugl_World) {
 		// PUGL_PROGRAM: we are the application - on macOS this sets up
@@ -107,7 +107,7 @@ int Pugl_Init(void) {
 
 // Views must go before the world they belong to.
 void Pugl_Quit(void) {
-	Pugl_Close_All_Views();
+	Pugl_Close_All_Windows();
 	Pugl_Purge_Events(NULL);
 	if (Pugl_World) {
 		puglFreeWorld(Pugl_World);

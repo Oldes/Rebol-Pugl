@@ -14,6 +14,10 @@
 
 #include <pugl/gl.h>
 
+// On Windows <pugl/gl.h> brings in windows.h, whose winerror.h defines
+// IS_ERROR too - and the embedded build's sys-value.h wants Rebol's.
+#undef IS_ERROR
+
 #include "gen-pugl.h"
 #include "rebol-pugl.h"
 
@@ -53,7 +57,7 @@ PuglStatus Pugl_Setup_Backend(PuglView *view)
 **  The texture is not deleted when the view closes: it belongs to the
 **  view's GL context, which takes its textures with it.
 ***********************************************************************/
-void Pugl_Draw(PUGLVIEWCTX *pv, PuglView *view)
+void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 {
 	PuglArea area = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
 	REBSER  *img  = (REBSER*)pv->image;

@@ -14,31 +14,31 @@
 #include <string.h>
 #include <stdlib.h> // MAKE_MEM / FREE_MEM
 
-static const REBYTE* ERR_INVALID_HANDLE = (const REBYTE*)"Invalid Pugl view handle!";
-static const REBYTE* ERR_NO_HANDLE      = (const REBYTE*)"Failed to create the view handle!";
-static const REBYTE* ERR_NO_VIEW        = (const REBYTE*)"Failed to create the view!";
+static const REBYTE* ERR_INVALID_HANDLE = (const REBYTE*)"Invalid Pugl window handle!";
+static const REBYTE* ERR_NO_HANDLE      = (const REBYTE*)"Failed to create the window handle!";
+static const REBYTE* ERR_NO_WINDOW        = (const REBYTE*)"Failed to create the window!";
 static const REBYTE* ERR_NO_WORLD       = (const REBYTE*)"Pugl world is not initialized!";
 static const REBYTE* ERR_BAD_SIZE       = (const REBYTE*)"Size must be between 1x1 and 10000x10000!";
 
 // Every open view, so they can all go before the world does.
-static PUGLVIEWCTX *Views_Head = NULL;
+static PUGLWIN *Windows_Head = NULL;
 
 
 //== helpers ==================================================================
 
 // Validates argument `n` as a view handle (open or closed).
-static PUGLVIEWCTX* Frm_View(RXIFRM *frm, REBCNT n)
+static PUGLWIN* Frm_Window(RXIFRM *frm, REBCNT n)
 {
 	REBHOB *hob;
-	if (!FRM_IS_HANDLE(n, Handle_PuglView)) return NULL;
+	if (!FRM_IS_HANDLE(n, Handle_PuglWindow)) return NULL;
 	hob = RXA_HANDLE_CONTEXT(frm, n);
 	if (!hob || !IS_USED_HOB(hob) || !hob->data) return NULL;
-	return (PUGLVIEWCTX*)hob->data;
+	return (PUGLWIN*)hob->data;
 }
 
 // Pugl wants a NUL-terminated string, which RL_GET_UTF8_STRING does not
 // promise - so the title is copied. Pugl copies it again on its side.
-static REBOOL Set_View_Title(PuglView *view, REBSER *ser, REBCNT index)
+static REBOOL Set_Window_Title(PuglView *view, REBSER *ser, REBCNT index)
 {
 	REBYTE *utf8 = NULL;
 	char   *buf;
@@ -67,7 +67,7 @@ static REBOOL Set_View_Title(PuglView *view, REBSER *ser, REBCNT index)
 #define SLOT_IMAGE 0
 #define SLOT_ICON  1
 
-static REBSER *View_Slots(PUGLVIEWCTX *pv)
+static REBSER *Window_Slots(PUGLWIN *pv)
 {
 	REBHOB *hob = pv->hob;
 	REBSER *blk;
@@ -90,9 +90,9 @@ static REBSER *View_Slots(PUGLVIEWCTX *pv)
 **  lives as long as the view shows it. `pv->image` is the same series,
 **  for the expose handler to read without calling into the interpreter.
 ***********************************************************************/
-static REBOOL Set_View_Image(PUGLVIEWCTX *pv, RXIARG *arg)
+static REBOOL Set_Window_Image(PUGLWIN *pv, RXIARG *arg)
 {
-	REBSER *slots = View_Slots(pv);
+	REBSER *slots = Window_Slots(pv);
 	RXIARG  none;
 
 	if (!slots) return FALSE;
@@ -120,9 +120,9 @@ static REBOOL Set_View_Image(PUGLVIEWCTX *pv, RXIARG *arg)
 **  The whole image, whatever its index: an image! crossing the ABI has
 **  its dimensions where a series has its index.
 ***********************************************************************/
-static REBOOL Set_View_Icon(PUGLVIEWCTX *pv, RXIARG *arg)
+static REBOOL Set_Window_Icon(PUGLWIN *pv, RXIARG *arg)
 {
-	REBSER *slots = View_Slots(pv);
+	REBSER *slots = Window_Slots(pv);
 	REBSER *img;
 	RXIARG  none;
 
@@ -143,7 +143,7 @@ static REBOOL Set_View_Icon(PUGLVIEWCTX *pv, RXIARG *arg)
 	return TRUE;
 }
 
-static void Remember_Frame(PUGLVIEWCTX *pv)
+static void Remember_Frame(PUGLWIN *pv)
 {
 	PuglView *view = (PuglView*)pv->view;
 	PuglPoint p = puglGetPositionHint(view, PUGL_CURRENT_POSITION);
@@ -160,10 +160,10 @@ static void Remember_Frame(PUGLVIEWCTX *pv)
 **  queued. Then the queued events of this view go, and the GC lock an
 **  open view holds on its handle is dropped.
 ***********************************************************************/
-static void Close_View(PUGLVIEWCTX *pv)
+static void Close_Window(PUGLWIN *pv)
 {
-	PuglView     *view = (PuglView*)pv->view;
-	PUGLVIEWCTX **link;
+	PuglView *view = (PuglView*)pv->view;
+	PUGLWIN **link;
 
 	if (!view) return;
 
@@ -173,11 +173,11 @@ static void Close_View(PUGLVIEWCTX *pv)
 	// Only now: the window used them until it was gone.
 	Pugl_Free_Native_Icon(pv->icon);
 
-	for (link = &Views_Head; *link; link = (PUGLVIEWCTX**)&(*link)->next) {
-		if (*link == pv) { *link = (PUGLVIEWCTX*)pv->next; break; }
+	for (link = &Windows_Head; *link; link = (PUGLWIN**)&(*link)->next) {
+		if (*link == pv) { *link = (PUGLWIN*)pv->next; break; }
 	}
 	pv->next = NULL;
-	if (Pugl_Views > 0) Pugl_Views--;
+	if (Pugl_Windows > 0) Pugl_Windows--;
 
 	Pugl_Purge_Events(pv);
 
@@ -191,9 +191,9 @@ static void Close_View(PUGLVIEWCTX *pv)
 	}
 }
 
-void Pugl_Close_All_Views(void)
+void Pugl_Close_All_Windows(void)
 {
-	while (Views_Head) Close_View(Views_Head);
+	while (Windows_Head) Close_Window(Windows_Head);
 }
 
 static REBYTE Modifier_Bits(PuglMods mods)
@@ -206,7 +206,7 @@ static REBYTE Modifier_Bits(PuglMods mods)
 }
 
 // Appends one event! to the block.
-static void Append_Event(REBSER *blk, REBCNT *at, PUGLVIEWCTX *pv,
+static void Append_Event(REBSER *blk, REBCNT *at, PUGLWIN *pv,
                          REBCNT type, REBYTE flags, u32 data)
 {
 	REBEVT ev;
@@ -238,7 +238,7 @@ static const REBCNT Up_Types[3]   = { EVT_UP,   EVT_ALT_UP,   EVT_AUX_UP   };
 ***********************************************************************/
 static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 {
-	PUGLVIEWCTX     *pv = q->ctx;
+	PUGLWIN         *pv = q->ctx;
 	const PuglEvent *e  = &q->event;
 
 	switch (e->type) {
@@ -319,14 +319,14 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 //== commands =================================================================
 
 /***********************************************************************
-**  open-view size [pair!] /title text /at offset /hidden /fixed
+**  open-window size [pair!] /title text /at offset /hidden /fixed
 **
 **  Frame: 1 size, 2 /title, 3 text, 4 /at, 5 offset, 6 /hidden, 7 /fixed
 ***********************************************************************/
-COMMAND cmd_pugl_open_view(RXIFRM *frm, void *ctx)
+COMMAND cmd_pugl_open_window(RXIFRM *frm, void *ctx)
 {
 	REBHOB      *hob;
-	PUGLVIEWCTX *pv;
+	PUGLWIN     *pv;
 	PuglView    *view;
 	REBINT       w = (REBINT)RXA_PAIR(frm, 1).x;
 	REBINT       h = (REBINT)RXA_PAIR(frm, 1).y;
@@ -334,16 +334,16 @@ COMMAND cmd_pugl_open_view(RXIFRM *frm, void *ctx)
 	if (w <= 0 || h <= 0 || w > 10000 || h > 10000) RETURN_ERROR(ERR_BAD_SIZE);
 	if (!Pugl_World) RETURN_ERROR(ERR_NO_WORLD);
 
-	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglView);
+	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglWindow);
 	if (!hob) RETURN_ERROR(ERR_NO_HANDLE);
-	pv = (PUGLVIEWCTX*)hob->data;
+	pv = (PUGLWIN*)hob->data;
 	CLEARS(pv);
 	pv->hob = hob;
 
 	view = puglNewView(Pugl_World);
 	if (!view) {
 		RL_FREE_HANDLE_CONTEXT(hob);
-		RETURN_ERROR(ERR_NO_VIEW);
+		RETURN_ERROR(ERR_NO_WINDOW);
 	}
 	puglSetHandle(view, pv);
 	Pugl_Setup_Backend(view);
@@ -351,7 +351,7 @@ COMMAND cmd_pugl_open_view(RXIFRM *frm, void *ctx)
 	puglSetSizeHint(view, PUGL_DEFAULT_SIZE, (unsigned)w, (unsigned)h);
 	puglSetViewHint(view, PUGL_RESIZABLE, RXA_REF(frm, 7) ? PUGL_FALSE : PUGL_TRUE);
 
-	if (RXA_REF(frm, 2)) Set_View_Title(view, RXA_SERIES(frm, 3), RXA_INDEX(frm, 3));
+	if (RXA_REF(frm, 2)) Set_Window_Title(view, RXA_SERIES(frm, 3), RXA_INDEX(frm, 3));
 	if (RXA_REF(frm, 4)) {
 		puglSetPositionHint(view, PUGL_DEFAULT_POSITION,
 			(int)RXA_PAIR(frm, 5).x, (int)RXA_PAIR(frm, 5).y);
@@ -362,13 +362,13 @@ COMMAND cmd_pugl_open_view(RXIFRM *frm, void *ctx)
 		puglFreeView(view);
 		Pugl_Purge_Events(pv);
 		RL_FREE_HANDLE_CONTEXT(hob);
-		RETURN_ERROR(ERR_NO_VIEW);
+		RETURN_ERROR(ERR_NO_WINDOW);
 	}
 
 	pv->view = view;
-	pv->next = Views_Head;
-	Views_Head = pv;
-	Pugl_Views++;  // the device poll pumps only while one of these exists
+	pv->next = Windows_Head;
+	Windows_Head = pv;
+	Pugl_Windows++;  // the device poll pumps only while one of these exists
 
 	// Realizing reports the initial frame; it is the starting point, not
 	// a change, so it is taken as the baseline instead of an event.
@@ -386,25 +386,25 @@ COMMAND cmd_pugl_open_view(RXIFRM *frm, void *ctx)
 
 // Closing an already closed view is not an error - it is what a `close`
 // handler ends up doing when the user was quicker.
-COMMAND cmd_pugl_close_view(RXIFRM *frm, void *ctx)
+COMMAND cmd_pugl_close_window(RXIFRM *frm, void *ctx)
 {
-	PUGLVIEWCTX *pv = Frm_View(frm, 1);
+	PUGLWIN *pv = Frm_Window(frm, 1);
 	if (!pv) RETURN_ERROR(ERR_INVALID_HANDLE);
-	Close_View(pv);
+	Close_Window(pv);
 	return RXR_TRUE;
 }
 
-COMMAND cmd_pugl_show_view(RXIFRM *frm, void *ctx)
+COMMAND cmd_pugl_show_window(RXIFRM *frm, void *ctx)
 {
-	PUGLVIEWCTX *pv = Frm_View(frm, 1);
+	PUGLWIN *pv = Frm_Window(frm, 1);
 	if (!pv || !pv->view) RETURN_ERROR(ERR_INVALID_HANDLE);
 	puglShow((PuglView*)pv->view, PUGL_SHOW_RAISE);
 	return RXR_TRUE;
 }
 
-COMMAND cmd_pugl_hide_view(RXIFRM *frm, void *ctx)
+COMMAND cmd_pugl_hide_window(RXIFRM *frm, void *ctx)
 {
-	PUGLVIEWCTX *pv = Frm_View(frm, 1);
+	PUGLWIN *pv = Frm_Window(frm, 1);
 	if (!pv || !pv->view) RETURN_ERROR(ERR_INVALID_HANDLE);
 	puglHide((PuglView*)pv->view);
 	return RXR_TRUE;
@@ -423,7 +423,7 @@ COMMAND cmd_pugl_poll_events(RXIFRM *frm, void *ctx)
 	REBCNT   count, at = 0;
 	PUGLQEVT q;
 
-	if (Pugl_World && Pugl_Views) puglUpdate(Pugl_World, 0.0);
+	if (Pugl_World && Pugl_Windows) puglUpdate(Pugl_World, 0.0);
 
 	if (Pugl_Dropped_Events) {
 		printf("Pugl: dropped %u events (queue full)\n", Pugl_Dropped_Events);
@@ -456,7 +456,7 @@ COMMAND cmd_pugl_poll_events(RXIFRM *frm, void *ctx)
 ***********************************************************************/
 COMMAND cmd_pugl_redraw(RXIFRM *frm, void *ctx)
 {
-	PUGLVIEWCTX *pv = Frm_View(frm, 1);
+	PUGLWIN *pv = Frm_Window(frm, 1);
 	if (!pv || !pv->view) RETURN_ERROR(ERR_INVALID_HANDLE);
 	pv->dirty = TRUE;
 	puglObscureView((PuglView*)pv->view);
@@ -469,15 +469,15 @@ COMMAND cmd_pugl_redraw(RXIFRM *frm, void *ctx)
 
 // Reached through an explicit `release`, or at shutdown - an open view is
 // locked against the GC.
-int PuglView_free(void *hndl)
+int PuglWindow_free(void *hndl)
 {
-	REBHOB      *hob = (REBHOB*)hndl;
-	PUGLVIEWCTX *pv;
+	REBHOB  *hob = (REBHOB*)hndl;
+	PUGLWIN *pv;
 
 	if (!hob) return 0;
-	pv = (PUGLVIEWCTX*)hob->data;
+	pv = (PUGLWIN*)hob->data;
 	if (pv) {
-		Close_View(pv);
+		Close_Window(pv);
 		debug_print("releasing Pugl view handle: %p\n", (void*)pv);
 		CLEARS(pv);
 	}
@@ -486,10 +486,10 @@ int PuglView_free(void *hndl)
 }
 
 
-int PuglView_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
+int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 {
-	PUGLVIEWCTX *pv   = (PUGLVIEWCTX*)hob->data;
-	PuglView    *view = (PuglView*)pv->view;
+	PUGLWIN  *pv   = (PUGLWIN*)hob->data;
+	PuglView *view = (PuglView*)pv->view;
 
 	word = RL_FIND_WORD(Pugl_arg_words, word);
 
@@ -580,17 +580,17 @@ int PuglView_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 }
 
 
-int PuglView_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
+int PuglWindow_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 {
-	PUGLVIEWCTX *pv   = (PUGLVIEWCTX*)hob->data;
-	PuglView    *view = (PuglView*)pv->view;
+	PUGLWIN  *pv   = (PUGLWIN*)hob->data;
+	PuglView *view = (PuglView*)pv->view;
 
 	if (!view) return PE_BAD_SET; // closed views are read-only
 
 	switch (RL_FIND_WORD(Pugl_arg_words, word)) {
 	case W_PUGL_ARG_TITLE:
 		if (*type != RXT_STRING) return PE_BAD_SET_TYPE;
-		if (!Set_View_Title(view, (REBSER*)arg->series, arg->index)) return PE_BAD_SET;
+		if (!Set_Window_Title(view, (REBSER*)arg->series, arg->index)) return PE_BAD_SET;
 		break;
 
 	case W_PUGL_ARG_SIZE:
@@ -611,21 +611,21 @@ int PuglView_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 
 	case W_PUGL_ARG_IMAGE:
 		if (*type == RXT_NONE) {
-			if (!Set_View_Image(pv, NULL)) return PE_BAD_SET;
+			if (!Set_Window_Image(pv, NULL)) return PE_BAD_SET;
 			break;
 		}
 		if (*type != RXT_IMAGE) return PE_BAD_SET_TYPE;
 		if (!arg->image) return PE_BAD_SET;
-		if (!Set_View_Image(pv, arg)) return PE_BAD_SET;
+		if (!Set_Window_Image(pv, arg)) return PE_BAD_SET;
 		break;
 
 	case W_PUGL_ARG_ICON:
 		if (*type == RXT_NONE) {
-			if (!Set_View_Icon(pv, NULL)) return PE_BAD_SET;
+			if (!Set_Window_Icon(pv, NULL)) return PE_BAD_SET;
 			break;
 		}
 		if (*type != RXT_IMAGE) return PE_BAD_SET_TYPE;
-		if (!Set_View_Icon(pv, arg)) return PE_BAD_SET;
+		if (!Set_Window_Icon(pv, arg)) return PE_BAD_SET;
 		break;
 
 	default:
@@ -635,12 +635,12 @@ int PuglView_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 }
 
 
-int PuglView_mold(REBHOB *hob, REBSER *str)
+int PuglWindow_mold(REBHOB *hob, REBSER *str)
 {
-	int          len;
-	PUGLVIEWCTX *pv;
+	int      len;
+	PUGLWIN *pv;
 
-	if (!str || !hob || !(pv = (PUGLVIEWCTX*)hob->data)) return 0;
+	if (!str || !hob || !(pv = (PUGLWIN*)hob->data)) return 0;
 
 	SERIES_TAIL(str) = 0;
 	if (pv->view) {

@@ -33,8 +33,8 @@ static PUGLQEVT *Last_Event(void) {
 
 // Callback set on every view with puglSetEventFunc().
 PuglStatus Pugl_On_Event(PuglView *view, const PuglEvent *event) {
-	PUGLVIEWCTX *ctx = (PUGLVIEWCTX*)puglGetHandle(view);
-	PUGLQEVT    *last;
+	PUGLWIN  *ctx = (PUGLWIN*)puglGetHandle(view);
+	PUGLQEVT *last;
 
 	if (!ctx) return PUGL_SUCCESS;
 
@@ -103,7 +103,7 @@ REBOOL Pugl_Take_Event(PUGLQEVT *out) {
 }
 
 // Drops the events of one view (it is going away), or all of them.
-void Pugl_Purge_Events(PUGLVIEWCTX *ctx) {
+void Pugl_Purge_Events(PUGLWIN *ctx) {
 	REBCNT r, w;
 
 	if (!ctx) {

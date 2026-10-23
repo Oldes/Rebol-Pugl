@@ -16,7 +16,7 @@
 
 // pugl.c
 extern PuglWorld *Pugl_World;
-extern REBCNT     Pugl_Views;          // views realized and not yet closed
+extern REBCNT     Pugl_Windows;          // views realized and not yet closed
 void Pugl_Quit(void);
 
 // pugl-events.c
@@ -25,8 +25,8 @@ void Pugl_Quit(void);
 // came from. Conversion to event! happens in `poll-events`, on the
 // interpreter's side - the producer must not allocate Rebol series.
 typedef struct Pugl_Queued_Event {
-	PUGLVIEWCTX *ctx;
-	PuglEvent    event;
+	PUGLWIN  *ctx;
+	PuglEvent event;
 } PUGLQEVT;
 
 extern REBCNT Pugl_Dropped_Events;     // events lost to a full queue
@@ -34,21 +34,21 @@ extern REBCNT Pugl_Dropped_Events;     // events lost to a full queue
 PuglStatus Pugl_On_Event(PuglView *view, const PuglEvent *event);
 REBCNT     Pugl_Event_Count(void);
 REBOOL     Pugl_Take_Event(PUGLQEVT *out);
-void       Pugl_Purge_Events(PUGLVIEWCTX *ctx); // NULL purges everything
+void       Pugl_Purge_Events(PUGLWIN *ctx); // NULL purges everything
 
 // pugl-draw.c - everything which touches OpenGL, so that no other source
 // needs the GL headers (nor, on Windows, windows.h).
 PuglStatus Pugl_Setup_Backend(PuglView *view);
-void       Pugl_Draw(PUGLVIEWCTX *pv, PuglView *view);
+void       Pugl_Draw(PUGLWIN *pv, PuglView *view);
 
 // pugl-commands.c
-void Pugl_Close_All_Views(void);
+void Pugl_Close_All_Windows(void);
 
-// View handle callbacks. Named after the HANDLE TYPE (PUGL-VIEW); that is
+// View handle callbacks. Named after the HANDLE TYPE (PUGL-WINDOW); that is
 // a different identifier from Pugl's own `PuglView` typedef.
-int PuglView_free(void *hndl);
-int PuglView_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
-int PuglView_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
-int PuglView_mold(REBHOB *hob, REBSER *str);
+int PuglWindow_free(void *hndl);
+int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
+int PuglWindow_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
+int PuglWindow_mold(REBHOB *hob, REBSER *str);
 
 #endif

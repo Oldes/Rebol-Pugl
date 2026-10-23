@@ -2,8 +2,8 @@ Rebol [
 	Title:   "Rebol/Pugl extension test"
 	Needs:   3.22.10
 	Purpose: {
-		Opens a view and prints the events it produces. Meant to be run
-		by a human - close the view (or press Escape) to end it.
+		Opens a window and prints the events it produces. Meant to be run
+		by a human - close the window (or press Escape) to end it.
 
 		Usage:
 			r3 test.r3
@@ -25,50 +25,50 @@ pugl: import 'pugl
 ? pugl
 
 ;;=============================================================================
-print as-yellow "^/== Opening a view"
+print as-yellow "^/== Opening a window"
 ;;=============================================================================
 
 ;; /hidden, so the accessors are read before anything is on screen.
-view: open-view/title/at/hidden 480x320 "Rebol Pugl extension" 200x120
+window: open-window/title/at/hidden 480x320 "Rebol Pugl extension" 200x120
 
-print ["view:     " view]
-print ["id:       " view/id]
-print ["open?:    " view/open? "(expected true)"]
-print ["visible?: " view/visible? "(expected false)"]
-print ["title:    " mold view/title {(expected "Rebol Pugl extension")}]
-print ["size:     " view/size "(expected 480x320)"]
-print ["offset:   " view/offset]
-print ["scale:    " view/scale "(sizes and offsets are in device pixels)"]
+print ["window:   " window]
+print ["id:       " window/id]
+print ["open?:    " window/open? "(expected true)"]
+print ["visible?: " window/visible? "(expected false)"]
+print ["title:    " mold window/title {(expected "Rebol Pugl extension")}]
+print ["size:     " window/size "(expected 480x320)"]
+print ["offset:   " window/offset]
+print ["scale:    " window/scale "(sizes and offsets are in device pixels)"]
 
 ;; every accessor which can be read can also be written, except
 ;; scale, id, visible? and open?
-view/title: "Rebol Pugl extension - move the mouse"
-print ["title:    " mold view/title]
-view/size: 500x340
-print ["size:     " view/size "(expected 500x340)"]
-print ["a bad size is refused:   " error? try [view/size: 0x10]]
-print ["a bad type is refused:   " error? try [view/title: 42]]
-print ["read-only scale:         " error? try [view/scale: 2.0]]
-print ["an unknown word:         " error? try [view/foo]]
-print ["the handle type:         " view/type]
+window/title: "Rebol Pugl extension - move the mouse"
+print ["title:    " mold window/title]
+window/size: 500x340
+print ["size:     " window/size "(expected 500x340)"]
+print ["a bad size is refused:   " error? try [window/size: 0x10]]
+print ["a bad type is refused:   " error? try [window/title: 42]]
+print ["read-only scale:         " error? try [window/scale: 2.0]]
+print ["an unknown word:         " error? try [window/foo]]
+print ["the handle type:         " window/type]
 
 ;;=============================================================================
-print as-yellow "^/== Closing a view"
+print as-yellow "^/== Closing a window"
 ;;=============================================================================
 
-;; A closed view keeps its handle: it reports `open?` false and none for
+;; A closed window keeps its handle: it reports `open?` false and none for
 ;; everything else, rather than pointing at freed memory.
-spare: open-view/hidden 200x100
+spare: open-window/hidden 200x100
 print ["spare:           " spare]
 print ["open?:           " spare/open? "(expected true)"]
-print ["close-view:      " close-view spare "(expected true)"]
+print ["close-window:      " close-window spare "(expected true)"]
 print ["open? after:     " spare/open? "(expected false)"]
 print ["size after:      " mold spare/size "(expected none)"]
 print ["title after:     " mold spare/title "(expected none)"]
 print ["id after:        " spare/id "(expected 0)"]
 print ["molded:          " spare "(expected closed)"]
-print ["closing twice:   " close-view spare "(expected true)"]
-print ["show refused:    " error? try [show-view spare]]
+print ["closing twice:   " close-window spare "(expected true)"]
+print ["show refused:    " error? try [show-window spare]]
 print ["redraw refused:  " error? try [redraw spare]]
 print ["image after:     " mold spare/image "(expected none)"]
 print ["icon after:      " mold spare/icon "(expected none)"]
@@ -80,9 +80,9 @@ release spare
 print as-yellow "^/== Bad arguments"
 ;;=============================================================================
 
-print ["zero size:       " error? try [open-view 0x10]]
-print ["too big:         " error? try [open-view 20000x10]]
-print ["not a view:      " error? try [show-view 42]]
+print ["zero size:       " error? try [open-window 0x10]]
+print ["too big:         " error? try [open-window 20000x10]]
+print ["not a window:      " error? try [show-window 42]]
 
 ;;=============================================================================
 print as-yellow "^/== Polling"
@@ -94,37 +94,37 @@ print ["poll-events:     " mold type? poll-events]
 print ["drained:         " length? poll-events "events"]
 
 ;; Opening reports nothing: the initial frame is the starting point.
-fresh: open-view/hidden 100x100
+fresh: open-window/hidden 100x100
 print ["after opening:   " length? poll-events "events (expected 0)"]
-close-view fresh
+close-window fresh
 release fresh
 
 ;; Pugl reports a move and a resize as one event; the extension reports
 ;; only what changed - `resize`, `offset` or both.
-view/size: 480x320
+window/size: 480x320
 wait 0.1
 print ["after resizing:  " mold collect [foreach evt poll-events [keep evt/type]]]
 print "  (expected [resize] - an `offset` too where the system moves the frame)"
 
 ;;=============================================================================
-print as-yellow "^/== Showing the view"
+print as-yellow "^/== Showing the window"
 ;;=============================================================================
 
-show-view view
-wait 0.1  ;; on X11 a view is mapped asynchronously
-print ["visible?:        " view/visible? "(expected true)"]
-hide-view view
+show-window window
+wait 0.1  ;; on X11 a window is mapped asynchronously
+print ["visible?:        " window/visible? "(expected true)"]
+hide-window window
 wait 0.1
-print ["hidden again:    " not view/visible?]
-show-view view
+print ["hidden again:    " not window/visible?]
+show-window window
 
 ;;=============================================================================
 print as-yellow "^/== An image"
 ;;=============================================================================
 
-;; The view keeps a REFERENCE to the image, not a copy - so drawing into
+;; The window keeps a REFERENCE to the image, not a copy - so drawing into
 ;; `pic` and calling `redraw` is all it takes to change what is on screen.
-;; It is drawn at its own size, in device pixels, centered in the view.
+;; It is drawn at its own size, in device pixels, centered in the window.
 pic: make image! 256x256
 
 paint: function ["Fills the image with a gradient" img [image!] shift [integer!]][
@@ -141,42 +141,42 @@ paint: function ["Fills the image with a gradient" img [image!] shift [integer!]
 ]
 paint pic 0
 
-print ["image before:    " mold view/image "(expected none)"]
-view/image: pic
-print ["the same series: " same? view/image pic "(expected true)"]
+print ["image before:    " mold window/image "(expected none)"]
+window/image: pic
+print ["the same series: " same? window/image pic "(expected true)"]
 ;; NEVER mold an image! into the console - only its type and size.
-shown: view/image
+shown: window/image
 print ["image is:        " type? shown "size:" shown/size "(expected 256x256)"]
 shown: none
-print ["a string refused:" error? try [view/image: "x"]]
-print ["redraw:          " redraw view "(expected true)"]
+print ["a string refused:" error? try [window/image: "x"]]
+print ["redraw:          " redraw window "(expected true)"]
 
 ;; Where it lands: half the spare room on each side, in whole pixels.
 ;; Pixels cannot be read back from the screen, so this prints where the
 ;; image's corner should be and the scene below shows it.
 image-at: func [/local d][
-	d: view/size - pic/size
+	d: window/size - pic/size
 	;; truncated, as C's integer division does it - also when negative
 	as-pair to integer! d/x / 2  to integer! d/y / 2
 ]
-print ["view size:       " view/size]
+print ["window size:       " window/size]
 print ["image corner at: " image-at "(centered)"]
 
-;; WATCH: a gradient in the middle of the view, black at its top-left, red
+;; WATCH: a gradient in the middle of the window, black at its top-left, red
 ;; to the right, green downwards, with an equal black border left and right,
 ;; and top and bottom. It goes away and comes back.
 wait 0.5
-view/image: none
-print ["removed:         " mold view/image "(expected none)"]
+window/image: none
+print ["removed:         " mold window/image "(expected none)"]
 wait 0.5
-view/image: pic
+window/image: pic
 
-;; WATCH: the image stays centered as the view changes size - smaller than
+;; WATCH: the image stays centered as the window changes size - smaller than
 ;; the image too, where it is cropped equally on both sides.
 foreach size [400x300 300x400 200x150 480x320] [
-	view/size: size
+	window/size: size
 	wait 0.4
-	print ["view size:       " pad view/size 9 "image corner at:" image-at]
+	print ["window size:       " pad window/size 9 "image corner at:" image-at]
 ]
 
 ;;=============================================================================
@@ -185,54 +185,54 @@ print as-yellow "^/== An icon"
 
 ;; The platform gets a COPY of the pixels when the icon is set, so drawing
 ;; into the image afterwards changes nothing until it is set again. On
-;; macOS it is the application's Dock icon, which the last view set wins.
+;; macOS it is the application's Dock icon, which the last window set wins.
 ;; Any size: Windows scales it down to its two icon sizes itself.
 ico: make image! 64x64
 paint ico 200
 
-print ["icon before:     " mold view/icon "(expected none)"]
-view/icon: ico
-print ["the same series: " same? view/icon ico "(expected true)"]
-shown: view/icon
+print ["icon before:     " mold window/icon "(expected none)"]
+window/icon: ico
+print ["the same series: " same? window/icon ico "(expected true)"]
+shown: window/icon
 print ["icon is:         " type? shown "size:" shown/size "(expected 64x64)"]
 shown: none
-print ["a string refused:" error? try [view/icon: "x"]]
-print ["an empty image:  " error? try [view/icon: make image! 0x0]]
+print ["a string refused:" error? try [window/icon: "x"]]
+print ["an empty image:  " error? try [window/icon: make image! 0x0]]
 
 ;; WATCH: the title bar and the taskbar (on macOS the Dock) show a red
 ;; and green gradient with a blue tint. It goes away and comes back.
 wait 0.5
-view/icon: none
-print ["removed:         " mold view/icon "(expected none)"]
+window/icon: none
+print ["removed:         " mold window/icon "(expected none)"]
 wait 0.5
 ;; Drawn into AFTER being set - the copy keeps the old colours until the
 ;; icon is set again, which is what the second line does.
-view/icon: ico
+window/icon: ico
 paint ico 0
-print ["redrawn image:   " same? view/icon ico "(still the same series)"]
+print ["redrawn image:   " same? window/icon ico "(still the same series)"]
 wait 0.5
-view/icon: ico   ;; WATCH: now without the blue tint
+window/icon: ico   ;; WATCH: now without the blue tint
 
 ;; A big one, scaled down - 256x256, as an application icon usually is.
-view/icon: pic
-print ["a bigger icon:   " view/icon/size "(expected 256x256)"]
+window/icon: pic
+print ["a bigger icon:   " window/icon/size "(expected 256x256)"]
 
 ;; A path going on PAST a handle field: the handle's answer is in the
 ;; path's scratch cell, and the image getter used to overwrite its own
-;; input there - `view/image/size` crashed the interpreter.
-print ["image/size:      " view/image/size "(expected 256x256)"]
-print ["image/width:     " view/image/width "(expected 256)"]
-print ["image/height:    " view/image/height "(expected 256)"]
+;; input there - `window/image/size` crashed the interpreter.
+print ["image/size:      " window/image/size "(expected 256x256)"]
+print ["image/width:     " window/image/width "(expected 256)"]
+print ["image/height:    " window/image/height "(expected 256)"]
 
 ;;=============================================================================
 print as-yellow "^/== Events"
 ;;=============================================================================
 
 print {
-Move the mouse over the view, click (left, right, middle), use the wheel,
+Move the mouse over the window, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
 A left click repaints the image in a new colour.
-Resize the view by dragging its edge - the image stays centered WHILE
+Resize the window by dragging its edge - the image stays centered WHILE
 dragging, shrinking as well as growing, with no stale copy left behind.
 A click on it is reported with its position on the image too.
 ESCAPE or the close button ends the test.
@@ -253,8 +253,8 @@ report: func [event /local type position d on-image][
 		last-move: position
 	]
 
-	;; Every event names the view it came from.
-	unless event/source == view [print as-red "!! event from another view"]
+	;; Every event names the window it came from.
+	unless event/source == window [print as-red "!! event from another window"]
 
 	;; Each press must be answered by exactly one release of the same kind.
 	switch type [
@@ -267,32 +267,32 @@ report: func [event /local type position d on-image][
 		aux-up [unless pressed = 'aux-down [print as-red "!! aux-up without aux-down"]  pressed: none]
 	]
 
-	;; With no button held, a move comes from inside the view.
+	;; With no button held, a move comes from inside the window.
 	if all [type = 'move  not pressed] [
 		unless all [
 			position/x >= 0  position/y >= 0
-			position/x < view/size/x  position/y < view/size/y
+			position/x < window/size/x  position/y < window/size/y
 		][
-			print as-red ["!! move outside the view:" position]
+			print as-red ["!! move outside the window:" position]
 		]
 	]
 
-	;; A resize carries the new size, which the view reports back - and
+	;; A resize carries the new size, which the window reports back - and
 	;; moves the centered image.
 	if type = 'resize [
-		if position <> view/size [
-			print as-red ["!! resize to" position "but size is" view/size]
+		if position <> window/size [
+			print as-red ["!! resize to" position "but size is" window/size]
 		]
 		print ["  image corner now at" image-at]
 	]
 
-	;; Escape ends it; `do-events` sees the view closed and returns.
+	;; Escape ends it; `do-events` sees the window closed and returns.
 	if all [type = 'key  event/key = #"^["] [
-		print "Escape - closing the view"
-		close-view view
+		print "Escape - closing the window"
+		close-window window
 	]
 
-	;; Drawing into the very image the view was given, then asking for it
+	;; Drawing into the very image the window was given, then asking for it
 	;; to be shown. Nothing is copied.
 	if type = 'down [
 		;; The image is centered, so its own coordinates are the event's
@@ -307,10 +307,10 @@ report: func [event /local type position d on-image][
 			print ["  outside the image"]
 		]
 		paint pic random 256
-		redraw view
+		redraw window
 	]
 
-	if type = 'close [print ["Closing view:" event/source]]
+	if type = 'close [print ["Closing window:" event/source]]
 
 	print [
 		as-green pad form type 12
@@ -323,15 +323,15 @@ report: func [event /local type position d on-image][
 	]
 ]
 
-;; Pumps the view, hands every event! to `report`, and returns once the view
+;; Pumps the window, hands every event! to `report`, and returns once the window
 ;; has been closed - by `close` or by the handler.
-do-events view :report
+do-events window :report
 
-print ["^/view closed - open?:" view/open? "(expected false)"]
-print ["molded:" view "(expected closed)"]
-print ["image after close:" mold view/image "(expected none)"]
+print ["^/window closed - open?:" window/open? "(expected false)"]
+print ["molded:" window "(expected closed)"]
+print ["image after close:" mold window/image "(expected none)"]
 print ["the image survives:" type? pic pic/size]
-release view
-print ["released:" view]
+release window
+print ["released:" window]
 
 print "done"

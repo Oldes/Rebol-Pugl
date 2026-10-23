@@ -44,59 +44,59 @@ pugl: import %pugl.rebx
 ## Extension commands:
 
 
-#### `open-view` `:size`
-Creates a top-level view and returns its handle
-* `size` `[pair!]` Size of the view
+#### `open-window` `:size`
+Creates a top-level window and returns its handle
+* `size` `[pair!]` Size of the window
 * `/title`
 * `text` `[string!]` Text shown in the title bar
 * `/at`
 * `offset` `[pair!]` Position of the top-left corner on the screen
-* `/hidden` Creates the view without showing it
+* `/hidden` Creates the window without showing it
 * `/fixed` The user cannot resize it
 
-#### `close-view` `:view`
-Destroys the view
-* `view` `[handle!]`
+#### `close-window` `:window`
+Destroys the window
+* `window` `[handle!]`
 
-#### `show-view` `:view`
-Makes the view visible
-* `view` `[handle!]`
+#### `show-window` `:window`
+Makes the window visible
+* `window` `[handle!]`
 
-#### `hide-view` `:view`
-Hides the view without destroying it
-* `view` `[handle!]`
+#### `hide-window` `:window`
+Hides the window without destroying it
+* `window` `[handle!]`
 
 #### `poll-events`
 Runs one Pugl main loop iteration and returns the collected events
 
-#### `redraw` `:view`
-Shows the view's image again - use after drawing into it
-* `view` `[handle!]`
+#### `redraw` `:window`
+Shows the window's image again - use after drawing into it
+* `window` `[handle!]`
 
 
 ## Used handles and its getters / setters
 
-#### __VIEW__ - Pugl view handle - a top-level window
+#### __WINDOW__ - Pugl window handle - a top-level window with an OpenGL view
 
 ```rebol
 ;Refinement       Gets                Sets                          Description
 /title            string!             string!                       "Text shown in the title bar"
-/size             pair!               pair!                         "Size of the view"
+/size             pair!               pair!                         "Size of the window"
 /offset           pair!               pair!                         "Position of the top-left corner on the screen"
 /scale            decimal!            none                          "Scale factor - 1.0 at standard DPI, 2.0 on a Retina display"
 /id               integer!            none                          "Native view handle (HWND / NSView* / X11 Window) as an integer"
-/visible?         logic!              none                          "Whether the view is currently visible"
-/open?            logic!              none                          "False once the view has been closed"
-/image            image!              [image! none!]                "Image shown at its own size, centered in the view; none for nothing. Kept by reference - draw into it and call `redraw`"
-/icon             image!              [image! none!]                "Icon of the view - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
+/visible?         logic!              none                          "Whether the window is currently visible"
+/open?            logic!              none                          "False once the window has been closed"
+/image            image!              [image! none!]                "Image shown at its own size, centered in the window; none for nothing. Kept by reference - draw into it and call `redraw`"
+/icon             image!              [image! none!]                "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
 ```
 
 
 ## Other extension values:
 ```rebol
 do-events: function [
-	"Pumps view events until the given view is closed"
-	view    [handle!]
+	"Pumps window events until the given window is closed"
+	window  [handle!]
 	handler [any-function!] "Called with one event! for each event"
 	/rate delay [number!] {Longest it may sleep with nothing to do (default: 0.02)}
 ][
@@ -109,13 +109,13 @@ do-events: function [
 			handler evt
 			;; `close` only reports the request - closing is ours to do
 			;; `==`, not `=`: on handles `=` compares only the type,
-			;; so any view's close would match
-			if all [evt/type = 'close  evt/source == view] [
-				close-view view
+			;; so any window's close would match
+			if all [evt/type = 'close  evt/source == window] [
+				close-window window
 			]
-			unless view/open? [break]
+			unless window/open? [break]
 		]
-		unless view/open? [exit]
+		unless window/open? [exit]
 		wait delay
 	]
 ]
