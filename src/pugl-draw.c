@@ -47,7 +47,7 @@ PuglStatus Pugl_Setup_Backend(PuglView *view)
 **  The image! layout is B G R A in memory with straight alpha, 255
 **  opaque, which GL takes as it is: GL_BGRA / GL_UNSIGNED_BYTE.
 ***********************************************************************/
-static void Upload(PUGLIMG *im, REBSER *img, REBINT w, REBINT h)
+static void Upload(PUGLNODE *im, REBSER *img, REBINT w, REBINT h)
 {
 	GLuint tex;
 
@@ -79,11 +79,49 @@ static void Upload(PUGLIMG *im, REBSER *img, REBINT w, REBINT h)
 }
 
 /***********************************************************************
+**  A list of images, its origin at ox,oy - a group is drawn where it is
+**  in the list, its own images in their order, relative to it.
+***********************************************************************/
+static void Draw_List(PUGLNODE *im, float ox, float oy)
+{
+	for (; im; im = (PUGLNODE*)im->next) {
+		REBSER *img = (REBSER*)im->image;
+		REBINT  iw, ih;
+		float   x, y, w, h;
+
+		if (!im->visible) continue;
+		if (im->group) {
+			Draw_List((PUGLNODE*)im->children, ox + (float)im->x, oy + (float)im->y);
+			continue;
+		}
+		if (!img) continue;
+		iw = (REBINT)IMG_WIDE(img);
+		ih = (REBINT)IMG_HIGH(img);
+		if (iw <= 0 || ih <= 0) continue;
+
+		Upload(im, img, iw, ih);
+
+		x = ox + (float)im->x;
+		y = oy + (float)im->y;
+		w = (float)(im->w > 0 ? im->w : iw);
+		h = (float)(im->h > 0 ? im->h : ih);
+
+		glBegin(GL_QUADS);
+		glTexCoord2f(0.0f, 0.0f); glVertex2f(x,     y);
+		glTexCoord2f(1.0f, 0.0f); glVertex2f(x + w, y);
+		glTexCoord2f(1.0f, 1.0f); glVertex2f(x + w, y + h);
+		glTexCoord2f(0.0f, 1.0f); glVertex2f(x,     y + h);
+		glEnd();
+	}
+}
+
+/***********************************************************************
 **  The expose handler - called with the window's GL context current,
 **  and the buffers are swapped by the backend after it returns.
 **
 **  The window is cleared to black, and its images are drawn in the
-**  order they were added, each at its offset and its size - scaled
+**  order they were added - those of a group where the group is - each
+**  at its offset and its size - scaled
 **  with nearest neighbour, so a pixel stays a pixel - blended by their
 **  alpha. One unit is one device pixel, origin at the top left.
 **
@@ -94,7 +132,6 @@ static void Upload(PUGLIMG *im, REBSER *img, REBINT w, REBINT h)
 void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 {
 	PuglArea area = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
-	PUGLIMG *im;
 	REBCNT   n;
 
 	glViewport(0, 0, area.width, area.height);
@@ -120,30 +157,7 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
-	for (im = (PUGLIMG*)pv->images; im; im = (PUGLIMG*)im->next) {
-		REBSER *img = (REBSER*)im->image;
-		REBINT  iw, ih;
-		float   x, y, w, h;
-
-		if (!im->visible || !img) continue;
-		iw = (REBINT)IMG_WIDE(img);
-		ih = (REBINT)IMG_HIGH(img);
-		if (iw <= 0 || ih <= 0) continue;
-
-		Upload(im, img, iw, ih);
-
-		x = (float)im->x;
-		y = (float)im->y;
-		w = (float)(im->w > 0 ? im->w : iw);
-		h = (float)(im->h > 0 ? im->h : ih);
-
-		glBegin(GL_QUADS);
-		glTexCoord2f(0.0f, 0.0f); glVertex2f(x,     y);
-		glTexCoord2f(1.0f, 0.0f); glVertex2f(x + w, y);
-		glTexCoord2f(1.0f, 1.0f); glVertex2f(x + w, y + h);
-		glTexCoord2f(0.0f, 1.0f); glVertex2f(x,     y + h);
-		glEnd();
-	}
+	Draw_List((PUGLNODE*)pv->images, 0.0f, 0.0f);
 
 	glDisable(GL_BLEND);
 	glDisable(GL_TEXTURE_2D);

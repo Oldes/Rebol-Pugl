@@ -2,7 +2,7 @@
 // Project: Rebol/Pugl extension
 // SPDX-License-Identifier: MIT
 // ===========================================================================
-// Command implementations and the window and image handle callbacks.
+// Command implementations and the window, image and group handle callbacks.
 //
 // The enum, the declarations, the dispatch table and the `_init` handler
 // are all generated from pugl.reb.
@@ -16,6 +16,7 @@
 
 static const REBYTE* ERR_INVALID_HANDLE = (const REBYTE*)"Invalid Pugl window handle!";
 static const REBYTE* ERR_INVALID_IMAGE  = (const REBYTE*)"Invalid Pugl image handle!";
+static const REBYTE* ERR_INVALID_TARGET = (const REBYTE*)"Not an open Pugl window or a shown group!";
 static const REBYTE* ERR_NO_HANDLE      = (const REBYTE*)"Failed to create the handle!";
 static const REBYTE* ERR_NO_WINDOW      = (const REBYTE*)"Failed to create the window!";
 static const REBYTE* ERR_NO_WORLD       = (const REBYTE*)"Pugl world is not initialized!";
@@ -38,14 +39,76 @@ static PUGLWIN* Frm_Window(RXIFRM *frm, REBCNT n)
 	return (PUGLWIN*)hob->data;
 }
 
-// ... and as an image handle (shown or removed).
-static PUGLIMG* Frm_Image(RXIFRM *frm, REBCNT n)
+static void Set_Handle_Arg(RXIARG *arg, REBHOB *hob);
+
+// ... and as an image or a group handle (shown or removed).
+static PUGLNODE* Frm_Node(RXIFRM *frm, REBCNT n)
 {
 	REBHOB *hob;
-	if (!FRM_IS_HANDLE(n, Handle_PuglImage)) return NULL;
+	if (!FRM_IS_HANDLE(n, Handle_PuglImage) && !FRM_IS_HANDLE(n, Handle_PuglGroup))
+		return NULL;
 	hob = RXA_HANDLE_CONTEXT(frm, n);
 	if (!hob || !IS_USED_HOB(hob) || !hob->data) return NULL;
-	return (PUGLIMG*)hob->data;
+	return (PUGLNODE*)hob->data;
+}
+
+// What `add-image` and `add-group` add to: an open window, or a group
+// shown in one. Gives the window and the list to append to.
+static PUGLWIN* Frm_Target(RXIFRM *frm, REBCNT n, PUGLNODE **parent)
+{
+	PUGLWIN  *win = Frm_Window(frm, n);
+	PUGLNODE *grp;
+
+	*parent = NULL;
+	if (win) return win->view ? win : NULL;
+	grp = Frm_Node(frm, n);
+	if (!grp || !grp->group || !grp->win) return NULL;
+	*parent = grp;
+	return (PUGLWIN*)grp->win;
+}
+
+// The list a node is in.
+static PUGLNODE **Node_List(PUGLWIN *win, PUGLNODE *parent)
+{
+	return parent ? (PUGLNODE**)&parent->children : (PUGLNODE**)&win->images;
+}
+
+// Whether `n` is `from` or one of the groups `from` is in.
+static REBOOL In_Chain(PUGLNODE *from, PUGLNODE *n)
+{
+	for (; from; from = (PUGLNODE*)from->parent) if (from == n) return TRUE;
+	return FALSE;
+}
+
+// Every image in a list, groups included, to be uploaded again.
+static void Mark_Dirty(PUGLNODE *list)
+{
+	for (; list; list = (PUGLNODE*)list->next) {
+		if (list->group) Mark_Dirty((PUGLNODE*)list->children);
+		else list->dirty = TRUE;
+	}
+}
+
+// A list as a block of handles, in drawing order. Empty rather than none,
+// so it can always be iterated.
+static REBOOL Nodes_Block(PUGLNODE *list, RXIARG *arg)
+{
+	PUGLNODE *n;
+	REBSER   *blk;
+	REBCNT    count = 0;
+	RXIARG    val;
+
+	for (n = list; n; n = (PUGLNODE*)n->next) count++;
+	blk = (REBSER*)RL_MAKE_BLOCK(count);
+	if (!blk) return FALSE;
+	count = 0;
+	for (n = list; n; n = (PUGLNODE*)n->next) {
+		Set_Handle_Arg(&val, n->hob);
+		RL_SET_VALUE(blk, count++, val, RXT_HANDLE);
+	}
+	arg->series = blk;
+	arg->index  = 0;
+	return TRUE;
 }
 
 // A handle context as a value - what `images` and `window` hand back.
@@ -144,33 +207,50 @@ static void Retire_Texture(PUGLWIN *win, REBCNT tex)
 }
 
 /***********************************************************************
-**  Takes an image out of its window. The handle stays, and reports
-**  none for everything from then on; it lets go of its image! and of
-**  the GC lock it held while it was shown.
+**  A node already out of its list - and, for a group, all that is in it.
+**  The handles stay, and report none for everything from then on; they
+**  let go of their image! and of the GC lock they held while shown.
 ***********************************************************************/
-static void Detach_Image(PUGLIMG *im)
+static void Release_Node(PUGLNODE *n, PUGLWIN *win)
 {
-	PUGLWIN  *win = (PUGLWIN*)im->win;
-	PUGLIMG **link;
+	while (n->children) {
+		PUGLNODE *c = (PUGLNODE*)n->children;
+		n->children = c->next;
+		Release_Node(c, win);
+	}
+	Retire_Texture(win, n->texture);
+
+	n->win     = NULL;
+	n->parent  = NULL;
+	n->next    = NULL;
+	n->image   = NULL;
+	n->texture = 0;
+	if (n->hob) {
+		n->hob->series = NULL;
+		n->hob->flags &= ~HANDLE_CONTEXT_LOCKED;
+	}
+}
+
+/***********************************************************************
+**  Takes an image out of its window, or a group with all that is in it.
+**
+**  What is removed reports nothing, not even a `leave`. The pointer is
+**  still in the groups around it, though, so the hover goes up to the
+**  group it was in: those get no second `enter` at the next move, and
+**  their `leave` still comes when the pointer goes.
+***********************************************************************/
+static void Detach_Node(PUGLNODE *n)
+{
+	PUGLWIN   *win = (PUGLWIN*)n->win;
+	PUGLNODE **link;
 
 	if (!win) return;
-	for (link = (PUGLIMG**)&win->images; *link; link = (PUGLIMG**)&(*link)->next) {
-		if (*link == im) { *link = (PUGLIMG*)im->next; break; }
+	if (In_Chain((PUGLNODE*)win->hover, n)) win->hover = n->parent;
+	for (link = Node_List(win, (PUGLNODE*)n->parent); *link; link = (PUGLNODE**)&(*link)->next) {
+		if (*link == n) { *link = (PUGLNODE*)n->next; break; }
 	}
-	Retire_Texture(win, im->texture);
+	Release_Node(n, win);
 	Window_Changed(win);
-	// A removed image reports nothing, not even a `leave`; the next move
-	// reports `enter` on whatever is there instead.
-	if (win->hover == im) win->hover = NULL;
-
-	im->win     = NULL;
-	im->next    = NULL;
-	im->image   = NULL;
-	im->texture = 0;
-	if (im->hob) {
-		im->hob->series = NULL;
-		im->hob->flags &= ~HANDLE_CONTEXT_LOCKED;
-	}
 }
 
 /***********************************************************************
@@ -241,7 +321,7 @@ static void Close_Window(PUGLWIN *pv)
 	// nothing is retired (pv->view is already NULL), and the list of the
 	// ones retired earlier is only memory now.
 	pv->hover = NULL;
-	while (pv->images) Detach_Image((PUGLIMG*)pv->images);
+	while (pv->images) Detach_Node((PUGLNODE*)pv->images);
 	if (pv->dead) FREE_MEM(pv->dead);
 	pv->dead = NULL;
 	pv->dead_count = pv->dead_size = 0;
@@ -303,26 +383,44 @@ static void Append_Event_Of(REBSER *blk, REBCNT *at, REBHOB *source,
 #define HAS_CODE      (1 << EVF_HAS_CODE)
 
 /***********************************************************************
-**  The topmost visible image under a point of the window, or NULL.
-**  The list is in drawing order, so the last match is the one on top.
-**  The right and bottom edges are outside, so images laid edge to edge
-**  never both claim a point.
+**  The topmost visible image under a point of a list, or NULL - the
+**  point relative to the list's origin. In drawing order, so the last
+**  match is the one on top; a group is searched where it is in the list,
+**  and only while it is visible. The right and bottom edges are outside,
+**  so images laid edge to edge never both claim a point.
 ***********************************************************************/
-static PUGLIMG *Image_At(PUGLWIN *win, REBINT x, REBINT y)
+static PUGLNODE *Image_At(PUGLNODE *list, REBINT x, REBINT y)
 {
-	PUGLIMG *im, *top = NULL;
-	for (im = (PUGLIMG*)win->images; im; im = (PUGLIMG*)im->next) {
+	PUGLNODE *n, *hit, *top = NULL;
+	for (n = list; n; n = (PUGLNODE*)n->next) {
 		REBINT w, h;
-		if (!im->visible || !im->image) continue;
-		w = im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image);
-		h = im->h > 0 ? im->h : (REBINT)IMG_HIGH((REBSER*)im->image);
-		if (x >= im->x && y >= im->y && x < im->x + w && y < im->y + h) top = im;
+		if (!n->visible) continue;
+		if (n->group) {
+			hit = Image_At((PUGLNODE*)n->children, x - n->x, y - n->y);
+			if (hit) top = hit;
+			continue;
+		}
+		if (!n->image) continue;
+		w = n->w > 0 ? n->w : (REBINT)IMG_WIDE((REBSER*)n->image);
+		h = n->h > 0 ? n->h : (REBINT)IMG_HIGH((REBSER*)n->image);
+		if (x >= n->x && y >= n->y && x < n->x + w && y < n->y + h) top = n;
 	}
 	return top;
 }
 
+// `enter` for the groups `n` is in and then `n` itself - outermost first -
+// leaving out those the pointer was in already.
+static void Enter_Chain(REBSER *blk, REBCNT *at, PUGLNODE *n, PUGLNODE *was,
+                        REBINT x, REBINT y)
+{
+	if (!n || In_Chain(was, n)) return;   // and so are all around it
+	Enter_Chain(blk, at, (PUGLNODE*)n->parent, was, x, y);
+	if (n->track && n->hob)
+		Append_Event_Of(blk, at, n->hob, EVT_ENTER, HAS_XY, XY_DATA(x, y));
+}
+
 /***********************************************************************
-**  `enter` and `leave` per image, for the images with `track?` on.
+**  `enter` and `leave` per image and group, for those with `track?` on.
 **
 **  Worked out from the pointer's position whenever a pointer event is
 **  converted: when the topmost image under it changes, the old one gets
@@ -330,6 +428,10 @@ static PUGLIMG *Image_At(PUGLWIN *win, REBINT x, REBINT y)
 **  that order, and before the window's own event, the same order
 **  Rebol-GUI reports for widgets. `inside` FALSE is the pointer leaving
 **  the window, which leaves whatever it was over.
+**
+**  A group is over while one of its images is: going from one of its
+**  images to another reports nothing for it. Leaves go innermost first,
+**  the image before its groups; enters outermost first.
 **
 **  Hover is kept for every image, tracked or not - `hover?` reads it,
 **  and an untracked image on top still covers a tracked one below.
@@ -339,15 +441,17 @@ static PUGLIMG *Image_At(PUGLWIN *win, REBINT x, REBINT y)
 static void Hover_To(REBSER *blk, REBCNT *at, PUGLWIN *win,
                      REBINT x, REBINT y, REBOOL inside)
 {
-	PUGLIMG *now = inside ? Image_At(win, x, y) : NULL;
-	PUGLIMG *was = (PUGLIMG*)win->hover;
+	PUGLNODE *now = inside ? Image_At((PUGLNODE*)win->images, x, y) : NULL;
+	PUGLNODE *was = (PUGLNODE*)win->hover;
+	PUGLNODE *n;
 
 	if (now != was) {
-		if (was && was->track && was->hob)
-			Append_Event_Of(blk, at, was->hob, EVT_LEAVE, HAS_XY,
-			                XY_DATA(win->hover_x, win->hover_y));
-		if (now && now->track && now->hob)
-			Append_Event_Of(blk, at, now->hob, EVT_ENTER, HAS_XY, XY_DATA(x, y));
+		for (n = was; n && !In_Chain(now, n); n = (PUGLNODE*)n->parent) {
+			if (n->track && n->hob)
+				Append_Event_Of(blk, at, n->hob, EVT_LEAVE, HAS_XY,
+				                XY_DATA(win->hover_x, win->hover_y));
+		}
+		Enter_Chain(blk, at, now, was, x, y);
 		win->hover = now;
 	}
 	win->hover_x = x;
@@ -566,7 +670,8 @@ COMMAND cmd_pugl_poll_events(RXIFRM *frm, void *ctx)
 	}
 
 	// A configure can become two events (resize and offset), and a pointer
-	// event three (an image's leave, another's enter, and its own).
+	// event several: leaves and enters of images and the groups around
+	// them, then its own. The block grows if this is not enough.
 	count = Pugl_Event_Count();
 	blk = (REBSER*)RL_MAKE_BLOCK(count * 3);
 	if (!blk) RETURN_ERROR(ERR_NO_HANDLE);
@@ -585,25 +690,26 @@ COMMAND cmd_pugl_poll_events(RXIFRM *frm, void *ctx)
 /***********************************************************************
 **  redraw target [handle!]
 **
-**  Uploads an image's pixels again and shows them - or, given a window,
-**  every image in it. Needed after drawing into an image: the window
-**  only holds a reference, and has no way of knowing the pixels changed.
-**  One main loop iteration is run, so the new pixels are normally on
-**  screen when this returns.
+**  Uploads an image's pixels again and shows them - or, given a window
+**  or a group, every image in it. Needed after drawing into an image:
+**  the window only holds a reference, and has no way of knowing the
+**  pixels changed. One main loop iteration is run, so the new pixels are
+**  normally on screen when this returns.
 ***********************************************************************/
 COMMAND cmd_pugl_redraw(RXIFRM *frm, void *ctx)
 {
-	PUGLIMG *im = Frm_Image(frm, 1);
-	PUGLWIN *win;
+	PUGLNODE *n = Frm_Node(frm, 1);
+	PUGLWIN  *win;
 
-	if (im) {
-		if (!im->win) RETURN_ERROR(ERR_INVALID_IMAGE);
-		im->dirty = TRUE;
-		win = (PUGLWIN*)im->win;
+	if (n) {
+		if (!n->win) RETURN_ERROR(ERR_INVALID_IMAGE);
+		if (n->group) Mark_Dirty((PUGLNODE*)n->children);
+		else n->dirty = TRUE;
+		win = (PUGLWIN*)n->win;
 	} else {
 		win = Frm_Window(frm, 1);
 		if (!win || !win->view) RETURN_ERROR(ERR_INVALID_HANDLE);
-		for (im = (PUGLIMG*)win->images; im; im = (PUGLIMG*)im->next) im->dirty = TRUE;
+		Mark_Dirty((PUGLNODE*)win->images);
 	}
 	Window_Changed(win);
 	puglUpdate(Pugl_World, 0.0);
@@ -612,26 +718,42 @@ COMMAND cmd_pugl_redraw(RXIFRM *frm, void *ctx)
 
 
 /***********************************************************************
-**  add-image window [handle!] image [image!] offset [pair!] /size sz
+**  Appends a new node to the end of its list - drawn above everything
+**  added there before it - and locks its handle: the list points at it.
+***********************************************************************/
+static void Link_Node(PUGLWIN *win, PUGLNODE *parent, PUGLNODE *n)
+{
+	PUGLNODE **link;
+
+	n->win     = win;
+	n->parent  = parent;
+	n->visible = TRUE;
+	for (link = Node_List(win, parent); *link; link = (PUGLNODE**)&(*link)->next);
+	*link = n;
+	n->hob->flags |= HANDLE_CONTEXT_LOCKED;
+}
+
+/***********************************************************************
+**  add-image target [handle!] image [image!] offset [pair!] /size sz
 **
-**  Frame: 1 window, 2 image, 3 offset, 4 /size, 5 sz
+**  Frame: 1 target, 2 image, 3 offset, 4 /size, 5 sz
 **
 **  The window keeps a REFERENCE to the image, not a copy: drawing into
 **  that same image and calling `redraw` is how it is animated. Added at
-**  the end of the window's list, so it is drawn above everything added
-**  before it.
+**  the end of the window's or the group's list, so it is drawn above
+**  everything added there before it.
 ***********************************************************************/
 COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 {
-	PUGLWIN  *win = Frm_Window(frm, 1);
-	REBSER   *img = (REBSER*)RXA_IMAGE(frm, 2);
-	REBHOB   *hob;
-	REBSER   *slots;
-	PUGLIMG  *im;
-	PUGLIMG **link;
-	REBINT    w = 0, h = 0;
+	PUGLNODE  *parent;
+	PUGLWIN   *win = Frm_Target(frm, 1, &parent);
+	REBSER    *img = (REBSER*)RXA_IMAGE(frm, 2);
+	REBHOB    *hob;
+	REBSER    *slots;
+	PUGLNODE  *im;
+	REBINT     w = 0, h = 0;
 
-	if (!win || !win->view) RETURN_ERROR(ERR_INVALID_HANDLE);
+	if (!win) RETURN_ERROR(ERR_INVALID_TARGET);
 	if (!img || IMG_WIDE(img) == 0 || IMG_HIGH(img) == 0) RETURN_ERROR(ERR_BAD_IMAGE);
 	if (RXA_REF(frm, 4)) {
 		w = (REBINT)RXA_PAIR(frm, 5).x;
@@ -641,7 +763,7 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 
 	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglImage);
 	if (!hob) RETURN_ERROR(ERR_NO_HANDLE);
-	im = (PUGLIMG*)hob->data;
+	im = (PUGLNODE*)hob->data;
 	CLEARS(im);
 	im->hob = hob;
 
@@ -655,20 +777,13 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 	hob->series = slots;
 	RL_SET_VALUE(slots, SLOT_IMAGE, RXA_ARG(frm, 2), RXT_IMAGE);
 
-	im->win     = win;
 	im->image   = img;
 	im->x       = (REBINT)RXA_PAIR(frm, 3).x;
 	im->y       = (REBINT)RXA_PAIR(frm, 3).y;
 	im->w       = w;
 	im->h       = h;
-	im->visible = TRUE;
 	im->dirty   = TRUE;
-
-	for (link = (PUGLIMG**)&win->images; *link; link = (PUGLIMG**)&(*link)->next);
-	*link = im;
-
-	// The window's list points at this context.
-	hob->flags |= HANDLE_CONTEXT_LOCKED;
+	Link_Node(win, parent, im);
 	Window_Changed(win);
 
 	RETURN_HANDLE(hob);
@@ -676,13 +791,46 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 
 
 // Removing an image which is no longer shown is not an error - its window
-// may have been closed, which removes everything in it.
+// may have been closed, or its group removed, which removes everything in
+// it. A group goes with all that is in it.
 COMMAND cmd_pugl_remove_image(RXIFRM *frm, void *ctx)
 {
-	PUGLIMG *im = Frm_Image(frm, 1);
-	if (!im) RETURN_ERROR(ERR_INVALID_IMAGE);
-	Detach_Image(im);
+	PUGLNODE *n = Frm_Node(frm, 1);
+	if (!n) RETURN_ERROR(ERR_INVALID_IMAGE);
+	Detach_Node(n);
 	return RXR_TRUE;
+}
+
+
+/***********************************************************************
+**  add-group target [handle!] offset [pair!]
+**
+**  Frame: 1 target, 2 offset
+**
+**  An empty group, at the end of the window's or the group's list. What
+**  is added to it later is drawn where the group is in that list.
+***********************************************************************/
+COMMAND cmd_pugl_add_group(RXIFRM *frm, void *ctx)
+{
+	PUGLNODE *parent;
+	PUGLWIN  *win = Frm_Target(frm, 1, &parent);
+	REBHOB   *hob;
+	PUGLNODE *grp;
+
+	if (!win) RETURN_ERROR(ERR_INVALID_TARGET);
+
+	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglGroup);
+	if (!hob) RETURN_ERROR(ERR_NO_HANDLE);
+	grp = (PUGLNODE*)hob->data;
+	CLEARS(grp);
+	grp->hob   = hob;
+	grp->group = TRUE;
+	grp->x     = (REBINT)RXA_PAIR(frm, 2).x;
+	grp->y     = (REBINT)RXA_PAIR(frm, 2).y;
+	Link_Node(win, parent, grp);
+	// Nothing to draw yet - only what is added to it is.
+
+	RETURN_HANDLE(hob);
 }
 
 
@@ -765,25 +913,10 @@ int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_LOGIC;
 		break;
 
-	// A new block each time, in drawing order; empty rather than none, so
-	// it can always be iterated.
-	case W_PUGL_ARG_IMAGES: {
-		PUGLIMG *im;
-		REBSER  *blk;
-		REBCNT   n = 0;
-		RXIARG   val;
-		for (im = (PUGLIMG*)pv->images; im; im = (PUGLIMG*)im->next) n++;
-		blk = (REBSER*)RL_MAKE_BLOCK(n);
-		if (!blk) { *type = RXT_NONE; break; }
-		n = 0;
-		for (im = (PUGLIMG*)pv->images; im; im = (PUGLIMG*)im->next) {
-			Set_Handle_Arg(&val, im->hob);
-			RL_SET_VALUE(blk, n++, val, RXT_HANDLE);
-		}
-		arg->series = blk;
-		arg->index  = 0;
-		*type = RXT_BLOCK;
-		break; }
+	// A new block each time, in drawing order - its top level only.
+	case W_PUGL_ARG_IMAGES:
+		*type = Nodes_Block((PUGLNODE*)pv->images, arg) ? RXT_BLOCK : RXT_NONE;
+		break;
 
 	// The image! it was given, from the slot - not read back from the
 	// platform, which keeps only its own converted copy.
@@ -871,19 +1004,39 @@ int PuglWindow_mold(REBHOB *hob, REBSER *str)
 }
 
 
-//== image handle callbacks ===================================================
+//== image and group handle callbacks =========================================
+//
+// The same callbacks for both handle types - the context says which it is.
 
-// Reached through an explicit `release`, or at shutdown - a shown image is
-// locked against the GC, and its window holds a pointer to it.
+// Whether a word is an accessor of this kind of node. Those of the other
+// kind are refused like unknown ones.
+static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
+{
+	switch (word) {
+	case W_PUGL_ARG_IMAGE:
+	case W_PUGL_ARG_SIZE:    return !n->group;
+	case W_PUGL_ARG_IMAGES:  return n->group ? TRUE : FALSE;
+	case W_PUGL_ARG_OFFSET:
+	case W_PUGL_ARG_VISIBLEQ:
+	case W_PUGL_ARG_TRACKQ:
+	case W_PUGL_ARG_HOVERQ:
+	case W_PUGL_ARG_WINDOW:
+	case W_PUGL_ARG_PARENT:  return TRUE;
+	}
+	return FALSE;
+}
+
+// Reached through an explicit `release`, or at shutdown - a shown image or
+// group is locked against the GC, and its list holds a pointer to it.
 int PuglImage_free(void *hndl)
 {
-	REBHOB  *hob = (REBHOB*)hndl;
-	PUGLIMG *im;
+	REBHOB   *hob = (REBHOB*)hndl;
+	PUGLNODE *im;
 
 	if (!hob) return 0;
-	im = (PUGLIMG*)hob->data;
+	im = (PUGLNODE*)hob->data;
 	if (im) {
-		Detach_Image(im);
+		Detach_Node(im);
 		CLEARS(im);
 	}
 	UNMARK_HOB(hob);
@@ -893,14 +1046,15 @@ int PuglImage_free(void *hndl)
 
 int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 {
-	PUGLIMG *im = (PUGLIMG*)hob->data;
-	RXIARG   val;
+	PUGLNODE *im = (PUGLNODE*)hob->data;
+	RXIARG    val;
 
 	word = RL_FIND_WORD(Pugl_arg_words, word);
 
-	// A removed image answers none for everything. Unknown words (0) are
-	// refused, so PD_Handle can still answer `type`.
-	if (word != 0 && !im->win) {
+	// Unknown words are refused, so PD_Handle can still answer `type`;
+	// a removed image or group answers none for everything else.
+	if (!Node_Has(im, word)) return PE_BAD_SELECT;
+	if (!im->win) {
 		*type = RXT_NONE;
 		return PE_USE;
 	}
@@ -939,14 +1093,25 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_LOGIC;
 		break;
 
+	// The hovered image, and every group it is in.
 	case W_PUGL_ARG_HOVERQ:
-		arg->int32a = (((PUGLWIN*)im->win)->hover == im) ? 1 : 0;
+		arg->int32a = In_Chain((PUGLNODE*)((PUGLWIN*)im->win)->hover, im) ? 1 : 0;
 		*type = RXT_LOGIC;
 		break;
 
 	case W_PUGL_ARG_WINDOW:
 		Set_Handle_Arg(arg, ((PUGLWIN*)im->win)->hob);
 		*type = RXT_HANDLE;
+		break;
+
+	case W_PUGL_ARG_PARENT:
+		if (!im->parent) { *type = RXT_NONE; break; }
+		Set_Handle_Arg(arg, ((PUGLNODE*)im->parent)->hob);
+		*type = RXT_HANDLE;
+		break;
+
+	case W_PUGL_ARG_IMAGES:
+		*type = Nodes_Block((PUGLNODE*)im->children, arg) ? RXT_BLOCK : RXT_NONE;
 		break;
 
 	default:
@@ -958,11 +1123,13 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 
 int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 {
-	PUGLIMG *im = (PUGLIMG*)hob->data;
+	PUGLNODE *im = (PUGLNODE*)hob->data;
 
 	if (!im->win) return PE_BAD_SET; // removed images are read-only
+	word = RL_FIND_WORD(Pugl_arg_words, word);
+	if (!Node_Has(im, word)) return PE_BAD_SET;
 
-	switch (RL_FIND_WORD(Pugl_arg_words, word)) {
+	switch (word) {
 	// Swapping the image is swapping the reference the GC marks; the
 	// texture is uploaded again at the next draw.
 	case W_PUGL_ARG_IMAGE: {
@@ -1013,12 +1180,17 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 int PuglImage_mold(REBHOB *hob, REBSER *str)
 {
 	int      len;
-	PUGLIMG *im;
+	PUGLNODE *im;
 
-	if (!str || !hob || !(im = (PUGLIMG*)hob->data)) return 0;
+	if (!str || !hob || !(im = (PUGLNODE*)hob->data)) return 0;
 
 	SERIES_TAIL(str) = 0;
-	if (im->win && im->image) {
+	if (im->win && im->group) {
+		REBCNT    count = 0;
+		PUGLNODE *c;
+		for (c = (PUGLNODE*)im->children; c; c = (PUGLNODE*)c->next) count++;
+		APPEND_STRING(str, "%u at %dx%d", (unsigned)count, (int)im->x, (int)im->y);
+	} else if (im->win && im->image) {
 		APPEND_STRING(str, "%dx%d at %dx%d",
 			(int)(im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image)),
 			(int)(im->h > 0 ? im->h : (REBINT)IMG_HIGH((REBSER*)im->image)),

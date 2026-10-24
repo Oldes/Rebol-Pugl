@@ -46,6 +46,7 @@ void Pugl_Close_All_Windows(void);
 
 // Handle callbacks, named after the HANDLE TYPE (PUGL-WINDOW, PUGL-IMAGE).
 // PuglWindow_* is a different identifier from Pugl's own `PuglView`.
+// PUGL-GROUP shares the PuglImage_* ones: the context says which it is.
 int PuglWindow_free(void *hndl);
 int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
 int PuglWindow_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);

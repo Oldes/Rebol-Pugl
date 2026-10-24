@@ -232,6 +232,73 @@ print ["redraw refused:  " error? try [redraw img3]]
 release img3
 
 ;;=============================================================================
+print as-yellow "^/== Groups"
+;;=============================================================================
+
+;; A group places what is in it relative to itself, and moves, hides and is
+;; entered and left as a whole. Groups nest.
+dot: make image! [24x24 255.255.255]
+grp: add-group window 300x200
+print ["group handle:    " grp "(expected 0 at 300x200)"]
+print ["the handle type: " grp/type]
+print ["offset:          " grp/offset "(expected 300x200)"]
+print ["visible?:        " grp/visible? "(expected true)"]
+print ["track?:          " grp/track? "(expected false)"]
+print ["hover?:          " grp/hover? "(expected false)"]
+print ["its window:      " grp/window == window "(expected true)"]
+print ["parent:          " mold grp/parent "(expected none)"]
+print ["images:          " mold grp/images "(expected [])"]
+print ["on top:          " (last window/images) == grp "(expected true)"]
+
+g1: add-image grp dot 0x0
+g2: add-image grp dot 30x0
+inner: add-group grp 0x30
+g3: add-image inner dot 15x0
+print ["group molded:    " grp "(expected 3 at 300x200)"]
+print ["in order:        " all [
+	3 = length? grp/images
+	grp/images/1 == g1  grp/images/2 == g2  grp/images/3 == inner
+] "(expected true)"]
+print ["image's parent:  " g1/parent == grp "(expected true)"]
+print ["inner's parent:  " inner/parent == grp "(expected true)"]
+print ["nested parent:   " g3/parent == inner "(expected true)"]
+print ["nested window:   " g3/window == window "(expected true)"]
+print ["relative offset: " g3/offset "(expected 15x0)"]
+print ["top level parent:" mold img1/parent "(expected none)"]
+
+print ["no size:         " error? try [grp/size]]
+print ["no image:        " error? try [grp/image]]
+print ["images of image: " error? try [g1/images]]
+print ["a size refused:  " error? try [grp/size: 10x10]]
+print ["read-only images:" error? try [grp/images: []]]
+print ["add to an image: " error? try [add-image g1 dot 0x0]]
+print ["group in image:  " error? try [add-group g1 0x0]]
+print ["redraw a group:  " redraw grp "(expected true)"]
+
+;; WATCH: three white squares - two in a row, one below between them - go
+;; down and back up as one; then the lower one blinks, then all three.
+wait 0.3
+repeat i 20 [grp/offset: grp/offset + 0x5  wait 0.02]
+repeat i 20 [grp/offset: grp/offset - 0x5  wait 0.02]
+print ["moved back:      " grp/offset "(expected 300x200)"]
+inner/visible?: false  wait 0.3
+inner/visible?: true   wait 0.3
+grp/visible?: false    wait 0.3
+grp/visible?: true
+
+;; Removing a group removes all that is in it.
+tmp: add-group grp 0x60
+tmp-img: add-image tmp dot 0x0
+print ["remove a group:  " remove-image tmp "(expected true)"]
+print ["group removed:   " tmp "(expected removed)"]
+print ["its image too:   " tmp-img "(expected removed)"]
+print ["images after:    " mold tmp/images "(expected none)"]
+print ["add to removed:  " error? try [add-image tmp dot 0x0]]
+print ["left in group:   " length? grp/images "(expected 3)"]
+release tmp-img
+release tmp
+
+;;=============================================================================
 print as-yellow "^/== An icon"
 ;;=============================================================================
 
@@ -278,8 +345,10 @@ Move the mouse over the window, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
 A left click on an image repaints it in a new colour - the topmost one
 under the pointer - and reports where on it the click was.
-Both images report `enter` and `leave` themselves (as the event source);
-the window reports its own when the pointer crosses its edge.
+The two big images, the group of white squares, its lower square's group
+and the top-left square report `enter` and `leave` themselves (as the event
+source); the window reports its own when the pointer crosses its edge.
+Moving between the squares of the group does not leave the group.
 Resize the window by dragging its edge - the images stay where they are,
 unstretched, while dragging.
 ESCAPE or the close button ends the test.
@@ -289,23 +358,52 @@ ESCAPE or the close button ends the test.
 ;; of them - only report a move once it has travelled a bit.
 last-move: 0x0
 pressed: none   ;; the button between its `down` and its `up`
-over:    none   ;; the tracked image between its `enter` and its `leave`
+over:    []     ;; tracked images and groups between `enter` and `leave`
 
-;; Per image, on demand: only these two report `enter` and `leave`.
-img1/track?: true
-img2/track?: true
+;; On demand: only these report `enter` and `leave`.
+img1/track?:  true
+img2/track?:  true
+grp/track?:   true
+inner/track?: true
+g1/track?:    true
 
-;; The topmost image under a point, or none - the last one added is on top.
-image-at: function [point [pair!]][
-	foreach img reverse copy window/images [
-		if all [
-			img/visible?
-			point/x >= img/offset/x  point/y >= img/offset/y
-			point/x <  (img/offset/x + img/size/x)
-			point/y <  (img/offset/y + img/size/y)
-		][return img]
+;; Handles compare by type only with `=`, so blocks of them are searched
+;; with `==`.
+has?: function [list [block!] value][
+	foreach v list [if v == value [return true]]
+	false
+]
+;; The image or group and every group it is in, innermost first.
+chain-of: function [node][
+	chain: copy []
+	while [node][append chain node  node: node/parent]
+	chain
+]
+;; Where in the window a node's offset is measured from.
+origin-of: function [node][
+	origin: 0x0
+	while [node: node/parent][origin: origin + node/offset]
+	origin
+]
+
+;; The topmost image under a point, or none - the last one added is on top,
+;; and a group's images are where the group is, relative to it.
+image-at: function [point [pair!]][top-at window/images point]
+top-at: function [list [block!] point [pair!]][
+	hit: none
+	foreach node list [
+		unless node/visible? [continue]
+		either node/type = 'pugl-group [
+			if found: top-at node/images point - node/offset [hit: found]
+		][
+			if all [
+				point/x >= node/offset/x  point/y >= node/offset/y
+				point/x <  (node/offset/x + node/size/x)
+				point/y <  (node/offset/y + node/size/y)
+			][hit: node]
+		]
 	]
-	none
+	hit
 ]
 
 report: func [event /local type position d hit src][
@@ -319,34 +417,45 @@ report: func [event /local type position d hit src][
 	]
 
 	;; Every event names the window it came from - or, for `enter` and
-	;; `leave` of a tracked image, that image.
+	;; `leave` of a tracked image or group, that one.
 	src: event/source
-	either src/type = 'pugl-image [
-		unless find [enter leave] type [print as-red ["!!" type "from an image"]]
-		unless src/track? [print as-red "!! an image not tracked"]
-		unless src/window == window [print as-red "!! image of another window"]
-		;; Each enter is answered by one leave of the same image, before
-		;; another image is entered.
+	either find [pugl-image pugl-group] src/type [
+		unless find [enter leave] type [print as-red ["!!" type "from" src/type]]
+		unless src/track? [print as-red "!! not tracked"]
+		unless src/window == window [print as-red "!! of another window"]
 		either type = 'enter [
-			if over [print as-red ["!! enter while over" over]]
-			unless src == image-at position [
-				print as-red ["!! entered an image not on top at" position]
+			;; Entered once, while it has the top image under the pointer,
+			;; and after the tracked groups around it.
+			if has? over src [print as-red "!! entered twice"]
+			unless has? chain-of image-at position src [
+				print as-red ["!! entered what is not on top at" position]
 			]
-			over: src
+			foreach up next chain-of src [
+				if all [up/track?  not has? over up] [
+					print as-red ["!! entered before its group" up]
+				]
+			]
+			append over src
 		][
-			unless over == src [print as-red "!! leave of an image not entered"]
-			over: none
+			;; Left once for each enter, before the groups around it.
+			unless has? over src [print as-red "!! left what was not entered"]
+			foreach node over [
+				if all [not node == src  has? chain-of node src] [
+					print as-red ["!! left before" node "in it"]
+				]
+			]
+			remove-each node over [node == src]
 		]
 		print [
 			as-green pad form type 12
-			pad mold position 12 "image:" src
+			pad mold position 12 select [pugl-image "image:" pugl-group "group:"] src/type src
 		]
 		exit
 	][
 		unless event/source == window [print as-red "!! event from another window"]
 	]
-	;; The window's own leave comes after its image's.
-	if all [type = 'leave  over] [print as-red ["!! left the window while over" over]]
+	;; The window's own leave comes after those of what is in it.
+	if all [type = 'leave  not empty? over] [print as-red ["!! left the window while in" length? over]]
 
 	;; Each press must be answered by exactly one release of the same kind.
 	switch type [
@@ -386,7 +495,7 @@ report: func [event /local type position d hit src][
 	if type = 'down [
 		either hit: image-at position [
 			print ["  on" hit "at pixel"
-				(position - hit/offset) * hit/image/size / hit/size]
+				(position - (origin-of hit) - hit/offset) * hit/image/size / hit/size]
 			paint hit/image random 256
 			redraw hit
 		][

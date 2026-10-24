@@ -24,6 +24,7 @@ static char *init_block = PUGL_EXT_INIT_CODE;
 // That is a different identifier from Pugl's own `PuglView` typedef.
 REBCNT Handle_PuglWindow = 0;
 REBCNT Handle_PuglImage  = 0;
+REBCNT Handle_PuglGroup  = 0;
 
 // One world for the whole process - every view belongs to it.
 PuglWorld *Pugl_World = NULL;
@@ -91,7 +92,7 @@ int Pugl_Init(void) {
 	Handle_PuglWindow = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-WINDOW"), &spec);
 	if (Handle_PuglWindow == 0) return FALSE;
 
-	spec.size     = sizeof(PUGLIMG);
+	spec.size     = sizeof(PUGLNODE);
 	spec.flags    = HANDLE_REQUIRES_HOB_ON_FREE;
 	spec.free     = PuglImage_free;
 	spec.get_path = PuglImage_get_path;
@@ -100,6 +101,11 @@ int Pugl_Init(void) {
 
 	Handle_PuglImage = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-IMAGE"), &spec);
 	if (Handle_PuglImage == 0) return FALSE;
+
+	// A group is the same context with its own type, so a script can tell
+	// it apart - and the same callbacks, which look at what it is.
+	Handle_PuglGroup = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-GROUP"), &spec);
+	if (Handle_PuglGroup == 0) return FALSE;
 
 	if (!Pugl_World) {
 		// PUGL_PROGRAM: we are the application - on macOS this sets up

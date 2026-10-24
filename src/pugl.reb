@@ -8,7 +8,7 @@ REBOL [
 	Options: [delay]
 	Exports: [
 		open-window close-window show-window hide-window
-		poll-events do-events redraw add-image remove-image
+		poll-events do-events redraw add-image remove-image add-group
 	]
 	Purpose: {
 		Native top-level windows through the Pugl library.
@@ -24,6 +24,10 @@ REBOL [
 		Windows draw with OpenGL. `add-image` puts an image! in a window - by
 		reference, so drawing into it and calling `redraw` is all it takes
 		to animate. Images are drawn in the order they were added.
+
+		`add-group` makes a group, which images and other groups are added
+		to like to a window: their offsets are relative to it, and it moves,
+		hides and is entered and left as a whole.
 	}
 ]
 
@@ -34,6 +38,7 @@ c-prefix: Pugl
 c-header: {
 extern REBCNT Handle_PuglWindow;
 extern REBCNT Handle_PuglImage;
+extern REBCNT Handle_PuglGroup;
 
 // The device which runs puglUpdate() from the host's WAIT.
 extern REBDEV Dev_Pugl;
@@ -53,8 +58,9 @@ typedef struct Pugl_Window_Context {
 	// big and the small HICON). The image! itself is in hob->series.
 	void   *icon[2];
 
-	// What the window shows: the images added to it (PUGLIMG*), in the
-	// order they are drawn - the first one at the bottom.
+	// What the window shows: the images and groups added to it
+	// (PUGLNODE*), in the order they are drawn - the first one at the
+	// bottom. A group draws its own the same way, where it is in the list.
 	void   *images;
 
 	// Textures of images removed while the window was open. A texture
@@ -63,29 +69,35 @@ typedef struct Pugl_Window_Context {
 	REBCNT *dead;
 	REBCNT  dead_count, dead_size;
 
-	// The image the pointer is over (PUGLIMG*), worked out when the queued
+	// The image the pointer is over (PUGLNODE*), worked out when the queued
 	// pointer events are converted - and where it was last seen over it,
-	// for that image's `leave`.
+	// for that image's `leave`. The groups it is in are hovered too. Right
+	// after a removal it can be a group: the pointer is still in it, but
+	// over nothing in it until the next move says otherwise.
 	void   *hover;
 	REBINT  hover_x, hover_y;
 } PUGLWIN;
 
-// An image shown in a window. The image! itself is kept in the handle's
-// hob->series (which the GC marks); `image` is the same series, for the
-// expose handler to read without calling into the interpreter.
-typedef struct Pugl_Image_Context {
+// An image shown in a window, or a group of them - the same context for
+// both, as they sit in the same lists. The image! itself is kept in the
+// handle's hob->series (which the GC marks); `image` is the same series,
+// for the expose handler to read without calling into the interpreter.
+typedef struct Pugl_Node_Context {
 	REBHOB *hob;     // back reference
 	void   *win;     // PUGLWIN* it is shown in; NULL once removed
-	void   *next;    // next image of the same window, drawn above this one
-	void   *image;   // the image! series; NULL once removed
-	REBINT  x, y;    // offset in the window
+	void   *parent;  // PUGLNODE* group it is in; NULL at the window's top
+	void   *next;    // next one in the same list, drawn above this one
+	void   *children;// a group's own list (PUGLNODE*)
+	REBCNT  group;   // a group, not an image
+	void   *image;   // the image! series; NULL once removed, and for groups
+	REBINT  x, y;    // offset in the window, or in the group it is in
 	REBINT  w, h;    // size it is drawn at; 0 for the image's own
 	REBCNT  visible;
 	REBCNT  track;   // `track?`: enter and leave are reported for it
 	REBCNT  texture;      // GL texture name, 0 before the first draw
 	REBINT  tex_w, tex_h; // the size it was made with
 	REBCNT  dirty;        // the pixels must be uploaded again
-} PUGLIMG;
+} PUGLNODE;
 }
 
 ;; ---------------------------------------------------------------------------
@@ -101,19 +113,31 @@ handles: [
 		id       integer!  none      "Native view handle (HWND / NSView* / X11 Window) as an integer"
 		visible? logic!    none      "Whether the window is currently visible"
 		open?    logic!    none      "False once the window has been closed"
-		images   block!    none      "Images added with `add-image`, in drawing order - the first one at the bottom"
+		images   block!    none      "Images and groups added to it, in drawing order - the first one at the bottom"
 		icon     image!    [image! none!] "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
 	]
 	image: [
 		"Pugl image handle - an image! shown in a window"
 		;NAME    GET       SET       DESCRIPTION
 		image    image!    image!    "The image shown - kept by reference: draw into it and call `redraw`"
-		offset   pair!     pair!     "Position of its top-left corner in the window"
+		offset   pair!     pair!     "Position of its top-left corner in the window - or in its group"
 		size     pair!     pair!     "Size it is drawn at - scaled to it; a zero axis is the image's own"
 		visible? logic!    logic!    "Whether it is drawn"
 		track?   logic!    logic!    "Whether `enter` and `leave` are reported for it, with the image as the source; off by default"
 		hover?   logic!    none      "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
 		window   handle!   none      "The window it is shown in; none once removed"
+		parent   handle!   none      "The group it is in; none at the window's top level"
+	]
+	group: [
+		"Pugl group handle - images and groups moved, hidden and hovered together"
+		;NAME    GET       SET       DESCRIPTION
+		offset   pair!     pair!     "Position of its origin in the window - or in its group; what is in it is placed relative to it"
+		visible? logic!    logic!    "Whether what is in it is drawn"
+		track?   logic!    logic!    "Whether `enter` and `leave` are reported for it as a whole, with the group as the source; off by default"
+		hover?   logic!    none      "Whether the pointer is over one of its images, as of the last `poll-events`"
+		images   block!    none      "Images and groups added to it, in drawing order"
+		window   handle!   none      "The window it is shown in; none once removed"
+		parent   handle!   none      "The group it is in; none at the window's top level"
 	]
 ]
 
@@ -134,16 +158,24 @@ commands: [
 	poll-events:  ["Runs one Pugl main loop iteration and returns the collected events"]
 	redraw: [
 		"Shows images again - use after drawing into them"
-		target [handle!] "A window (all its images) or one image"
+		target [handle!] "A window or a group (all the images in it) or one image"
 	]
 	add-image: [
-		"Shows an image in a window and returns its handle"
-		window [handle!]
+		"Shows an image in a window or a group and returns its handle"
+		target [handle!] "A window, or a group - then the offset is relative to it"
 		image  [image!]  "Shown as is; the window keeps a reference, not a copy"
 		offset [pair!]   "Position of its top-left corner in the window"
 		/size sz [pair!] "Scales it to this size (default: the image's own)"
 	]
-	remove-image: ["Takes an image out of its window" image [handle!]]
+	remove-image: [
+		"Takes an image out of its window - or a group, with all that is in it"
+		image [handle!] "An image or a group"
+	]
+	add-group: [
+		"Makes a group in a window or a group and returns its handle"
+		target [handle!] "A window, or a group"
+		offset [pair!]   "Position of its origin - what is added to it is placed relative to it"
+	]
 ]
 
 ;; ---------------------------------------------------------------------------
