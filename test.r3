@@ -137,14 +137,29 @@ print as-yellow "^/== Images"
 ;; Everything here is put on one group, the `stage`, which is kept in the
 ;; middle of the window: after anything is added or removed, and whenever
 ;; the window is resized. The offsets below are on the stage.
-paint: function ["Fills the image with a gradient" img [image!] shift [integer!]][
-	size: img/size
+paint: function [
+	"Fills the image with a red/green gradient, turned and tinted blue by the shift"
+	img   [image!]
+	shift [integer!] "0 to 255 - from not turned to turned upside down"
+][
+	;; A blue tint alone is hard to tell on a small image, so the gradient
+	;; is turned around the middle too: red grows along one direction and
+	;; green across it, both clipped to 0..255 in the corners.
+	size:  img/size
+	shift: shift % 256
+	angle: shift * 180 / 255
+	c: cosine angle
+	s: sine angle
 	repeat y size/y [
 		repeat x size/x [
+			dx: (x - (size/x / 2)) / size/x   ;; -0.5 .. 0.5 from the middle
+			dy: (y - (size/y / 2)) / size/y
+			u: dx * c - (dy * s) + 0.5
+			v: dx * s + (dy * c) + 0.5
 			img/(as-pair x y): to tuple! reduce [
-				to integer! 255 * x / size/x
-				to integer! 255 * y / size/y
-				shift % 256
+				max 0 min 255 to integer! 255 * u
+				max 0 min 255 to integer! 255 * v
+				shift
 			]
 		]
 	]
@@ -258,7 +273,8 @@ wait 0.3
 img2/size: 128x128
 
 ;; WATCH: drawing into `small` changes BOTH images showing it - one redraw
-;; of the window uploads it for each.
+;; of the window uploads it for each: the gradient was upside down (and
+;; blue), now it is the right way up, red to the right and green down.
 paint small 0
 redraw window
 wait 0.3
@@ -429,7 +445,8 @@ print ["a string refused:" error? try [window/icon: "x"]]
 print ["an empty image:  " error? try [window/icon: make image! 0x0]]
 
 ;; WATCH: the title bar and the taskbar (on macOS the Dock) show a red
-;; and green gradient with a blue tint. It goes away and comes back.
+;; and green gradient with a blue tint, turned by most of a half turn. It
+;; goes away and comes back.
 wait 0.5
 window/icon: none
 print ["removed:         " mold window/icon "(expected none)"]
@@ -440,7 +457,7 @@ window/icon: ico
 paint ico 0
 print ["redrawn image:   " same? window/icon ico "(still the same series)"]
 wait 0.5
-window/icon: ico   ;; WATCH: now without the blue tint
+window/icon: ico   ;; WATCH: now the right way up, without the blue tint
 
 ;; A big one, scaled down - 256x256, as an application icon usually is.
 window/icon: pic
@@ -453,8 +470,9 @@ print as-yellow "^/== Events"
 print {
 Move the mouse over the window, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
-A left click on an image repaints it in a new colour - the topmost one
-under the pointer - and reports where on it the click was.
+A left click on an image repaints it - the topmost one under the pointer -
+with its gradient turned another way and a new tint, and reports where on
+it the click was.
 The two big images, the group of white squares, its lower square's group
 and the top-left square report `enter` and `leave` themselves (as the event
 source); the window reports its own when the pointer crosses its edge.
