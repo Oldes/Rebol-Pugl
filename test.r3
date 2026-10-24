@@ -133,6 +133,10 @@ print as-yellow "^/== Images"
 ;; it and calling `redraw` is all it takes to change what is on screen.
 ;; Images are drawn in the order they were added: the first at the bottom.
 ;; Offsets and sizes are in device pixels, from the window's top-left.
+;;
+;; Everything here is put on one group, the `stage`, which is kept in the
+;; middle of the window: after anything is added or removed, and whenever
+;; the window is resized. The offsets below are on the stage.
 paint: function ["Fills the image with a gradient" img [image!] shift [integer!]][
 	size: img/size
 	repeat y size/y [
@@ -148,8 +152,43 @@ paint: function ["Fills the image with a gradient" img [image!] shift [integer!]
 pic:   make image! 256x256  paint pic 0
 small: make image! 64x64    paint small 255
 
+bounds-of: function [
+	"The box a list's content takes, from the list's origin - [top-left bottom-right], or none"
+	list [block!]
+][
+	;; Hidden ones count too, so hiding something does not move the rest.
+	box: none
+	foreach node list [
+		part: either node/type = 'pugl-group [
+			if inner: bounds-of node/images [
+				reduce [inner/1 + node/offset  inner/2 + node/offset]
+			]
+		][
+			reduce [node/offset  node/offset + node/size]
+		]
+		if part [
+			box: either box [reduce [min box/1 part/1  max box/2 part/2]][part]
+		]
+	]
+	box
+]
+center-content: function ["Moves the stage so that what is on it is in the middle of the window"][
+	unless box: bounds-of stage/images [exit]
+	origin: (window/size - (box/2 - box/1)) / 2 - box/1
+	stage/offset: as-pair to integer! origin/x  to integer! origin/y
+]
+centered?: function ["Whether the stage's content is in the middle of the window, to a pixel"][
+	unless box: bounds-of stage/images [return true]
+	before: box/1 + stage/offset                 ;; the margin top-left
+	after:  window/size - (box/2 + stage/offset) ;; and bottom-right
+	all [1 >= abs before/x - after/x  1 >= abs before/y - after/y]
+]
+
 print ["images before:   " mold window/images "(expected [])"]
-img1: add-image window pic 20x20
+stage: add-group window 0x0
+print ["the stage:       " all [1 = length? window/images  window/images/1 == stage] "(expected true)"]
+print ["nothing to move: " centered? "(expected true - empty)"]
+img1: add-image stage pic 20x20
 print ["image handle:    " img1 "(expected 256x256 at 20x20)"]
 print ["the handle type: " img1/type]
 print ["the same series: " same? img1/image pic "(expected true)"]
@@ -157,6 +196,9 @@ print ["offset:          " img1/offset "(expected 20x20)"]
 print ["size:            " img1/size "(expected 256x256 - its own)"]
 print ["visible?:        " img1/visible? "(expected true)"]
 print ["its window:      " img1/window == window "(expected true)"]
+print ["on the stage:    " img1/parent == stage "(expected true)"]
+center-content
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 print ["track?:          " img1/track? "(expected false - off by default)"]
 print ["hover?:          " img1/hover? "(expected false)"]
 img1/track?: true
@@ -167,12 +209,14 @@ print ["track? a string: " error? try [img1/track?: "x"]]
 print ["read-only hover?:" error? try [img1/hover?: true]]
 
 ;; The same image twice: scaled to twice its size, and at its own over pic.
-img2: add-image/size window small 300x40 128x128
-img3: add-image window small 200x200
+img2: add-image/size stage small 300x40 128x128
+img3: add-image stage small 200x200
+center-content
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 print ["scaled:          " img2/size "(expected 128x128)"]
 print ["in order:        " all [
-	3 = length? window/images
-	window/images/1 == img1  window/images/2 == img2  window/images/3 == img3
+	3 = length? stage/images
+	stage/images/1 == img1  stage/images/2 == img2  stage/images/3 == img3
 ] "(expected true)"]
 
 print ["not an image:    " error? try [add-image window "x" 0x0]]
@@ -218,11 +262,14 @@ wait 0.3
 ;; Another image in place of the one shown, of another size.
 img3/image: make image! [32x32 255.200.0]
 print ["swapped:         " img3/size "(expected 32x32)"]
+center-content
 wait 0.3
 
 ;; Removed: the handle stays, and answers none for everything.
 print ["remove-image:    " remove-image img3 "(expected true)"]
-print ["images:          " length? window/images "(expected 2)"]
+print ["images:          " length? stage/images "(expected 2)"]
+center-content
+print ["centered:        " centered? "(expected true)"]
 print ["removed:         " img3 "(expected removed)"]
 print ["offset after:    " mold img3/offset "(expected none)"]
 print ["hover? after:    " mold img3/hover? "(expected none)"]
@@ -238,7 +285,7 @@ print as-yellow "^/== Groups"
 ;; A group places what is in it relative to itself, and moves, hides and is
 ;; entered and left as a whole. Groups nest.
 dot: make image! [24x24 255.255.255]
-grp: add-group window 300x200
+grp: add-group stage 300x200
 print ["group handle:    " grp "(expected 0 at 300x200)"]
 print ["the handle type: " grp/type]
 print ["offset:          " grp/offset "(expected 300x200)"]
@@ -246,14 +293,16 @@ print ["visible?:        " grp/visible? "(expected true)"]
 print ["track?:          " grp/track? "(expected false)"]
 print ["hover?:          " grp/hover? "(expected false)"]
 print ["its window:      " grp/window == window "(expected true)"]
-print ["parent:          " mold grp/parent "(expected none)"]
+print ["parent:          " grp/parent == stage "(expected true)"]
 print ["images:          " mold grp/images "(expected [])"]
-print ["on top:          " (last window/images) == grp "(expected true)"]
+print ["on top:          " (last stage/images) == grp "(expected true)"]
 
 g1: add-image grp dot 0x0
 g2: add-image grp dot 30x0
 inner: add-group grp 0x30
 g3: add-image inner dot 15x0
+center-content
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 print ["group molded:    " grp "(expected 3 at 300x200)"]
 print ["in order:        " all [
 	3 = length? grp/images
@@ -264,7 +313,7 @@ print ["inner's parent:  " inner/parent == grp "(expected true)"]
 print ["nested parent:   " g3/parent == inner "(expected true)"]
 print ["nested window:   " g3/window == window "(expected true)"]
 print ["relative offset: " g3/offset "(expected 15x0)"]
-print ["top level parent:" mold img1/parent "(expected none)"]
+print ["top level parent:" mold stage/parent "(expected none)"]
 
 print ["no size:         " error? try [grp/size]]
 print ["no image:        " error? try [grp/image]]
@@ -289,12 +338,15 @@ grp/visible?: true
 ;; Removing a group removes all that is in it.
 tmp: add-group grp 0x60
 tmp-img: add-image tmp dot 0x0
+center-content
 print ["remove a group:  " remove-image tmp "(expected true)"]
 print ["group removed:   " tmp "(expected removed)"]
 print ["its image too:   " tmp-img "(expected removed)"]
 print ["images after:    " mold tmp/images "(expected none)"]
 print ["add to removed:  " error? try [add-image tmp dot 0x0]]
 print ["left in group:   " length? grp/images "(expected 3)"]
+center-content
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 release tmp-img
 release tmp
 
@@ -349,8 +401,9 @@ The two big images, the group of white squares, its lower square's group
 and the top-left square report `enter` and `leave` themselves (as the event
 source); the window reports its own when the pointer crosses its edge.
 Moving between the squares of the group does not leave the group.
-Resize the window by dragging its edge - the images stay where they are,
-unstretched, while dragging.
+Resize the window by dragging its edge - the images are not stretched, and
+are moved back to the middle as soon as the resize is reported (on Windows
+when the drag ends: its modal resize loop does not let the script run).
 ESCAPE or the close button ends the test.
 }
 
@@ -478,9 +531,14 @@ report: func [event /local type position d hit src][
 		]
 	]
 
-	;; A resize carries the new size, which the window reports back.
-	if all [type = 'resize  position <> window/size] [
-		print as-red ["!! resize to" position "but size is" window/size]
+	;; A resize carries the new size, which the window reports back - and
+	;; the content goes back to the middle.
+	if type = 'resize [
+		if position <> window/size [
+			print as-red ["!! resize to" position "but size is" window/size]
+		]
+		center-content
+		unless centered? [print as-red ["!! not centered, stage at" stage/offset]]
 	]
 
 	;; Escape ends it; `do-events` sees the window closed and returns.
