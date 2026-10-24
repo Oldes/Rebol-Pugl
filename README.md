@@ -126,6 +126,7 @@ Makes a group in a window or a group and returns its handle
 /scale            [decimal! pair!]    [decimal! integer! pair!]     "Scale around its pivot - one for both axes, or a pair for each (default 1.0); a pair! only while the two differ"
 /pivot            pair!               pair!                         "Point it is turned and scaled around, in its own units from its top-left (default 0x0)"
 /opacity          percent!            [percent! decimal! integer!]  "How opaque it is, 0% to 100% (default 100%); still there for the pointer at 0%"
+/blend            word!               [word! none!]                 "How it is drawn over what is below: normal, add, multiply or screen; none (default) for its group's"
 ```
 
 #### __GROUP__ - Pugl group handle - images and groups moved, hidden and hovered together
@@ -144,6 +145,7 @@ Makes a group in a window or a group and returns its handle
 /scale            [decimal! pair!]    [decimal! integer! pair!]     "Scale around its pivot, of all in it - one for both axes, or a pair for each (default 1.0)"
 /pivot            pair!               pair!                         "Point it is turned and scaled around, in its own units from its origin (default 0x0)"
 /opacity          percent!            [percent! decimal! integer!]  "How opaque all in it is, 0% to 100% (default 100%), multiplied with their own"
+/blend            word!               [word! none!]                 "How what is in it is drawn, where it does not say itself: normal, add, multiply or screen; none (default) for its own group's"
 ```
 
 

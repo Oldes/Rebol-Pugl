@@ -20,6 +20,7 @@
 
 #include "gen-pugl.h"
 #include "rebol-pugl.h"
+#include <stdlib.h> // MAKE_MEM / FREE_MEM
 
 // Not in the GL 1.1 headers Windows ships with.
 #ifndef GL_BGRA
@@ -43,16 +44,47 @@ PuglStatus Pugl_Setup_Backend(PuglView *view)
 }
 
 /***********************************************************************
+**  The pixels premultiplied by their alpha, in a buffer kept for the
+**  next upload. Premultiplied, every blend mode is one glBlendFunc and
+**  right with alpha - with straight alpha, `multiply` and `screen` would
+**  ignore it. NULL if there is no memory for it.
+***********************************************************************/
+static REBYTE *Premultiplied(const REBYTE *bgra, REBINT w, REBINT h)
+{
+	static REBYTE *buf  = NULL;
+	static REBCNT  size = 0;
+	REBCNT need = (REBCNT)w * (REBCNT)h * 4, n;
+
+	if (need > size) {
+		REBYTE *grown = (REBYTE*)MAKE_MEM(need);
+		if (!grown) return NULL;
+		if (buf) FREE_MEM(buf);
+		buf  = grown;
+		size = need;
+	}
+	for (n = 0; n < need; n += 4) {
+		REBCNT a = bgra[n + 3];
+		// (x * a + 127) / 255 - rounded, so 255 keeps 255 and 0 gives 0.
+		buf[n]     = (REBYTE)((bgra[n]     * a + 127) / 255);
+		buf[n + 1] = (REBYTE)((bgra[n + 1] * a + 127) / 255);
+		buf[n + 2] = (REBYTE)((bgra[n + 2] * a + 127) / 255);
+		buf[n + 3] = (REBYTE)a;
+	}
+	return buf;
+}
+
+/***********************************************************************
 **  Uploads an image's pixels into its texture, when they are new or
 **  `dirty` (set by `redraw` and by assigning `image`) - so an expose
 **  from the OS, the window uncovered say, draws what it already has.
 **
 **  The image! layout is B G R A in memory with straight alpha, 255
-**  opaque, which GL takes as it is: GL_BGRA / GL_UNSIGNED_BYTE.
+**  opaque: GL_BGRA / GL_UNSIGNED_BYTE, premultiplied on the way.
 ***********************************************************************/
 static void Upload(PUGLNODE *im, REBSER *img, REBINT w, REBINT h)
 {
-	GLuint tex;
+	GLuint  tex;
+	REBYTE *pixels;
 
 	if (!im->texture) {
 		glGenTextures(1, &tex);
@@ -68,13 +100,15 @@ static void Upload(PUGLNODE *im, REBSER *img, REBINT w, REBINT h)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	pixels = Premultiplied((const REBYTE*)IMG_DATA(img), w, h);
+	if (!pixels) return;   // stays dirty, and is tried again next time
 	// Same size: replace the pixels in place; otherwise a new texture.
 	if (w == im->tex_w && h == im->tex_h) {
 		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
-		                GL_BGRA, GL_UNSIGNED_BYTE, IMG_DATA(img));
+		                GL_BGRA, GL_UNSIGNED_BYTE, pixels);
 	} else {
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
-		             GL_BGRA, GL_UNSIGNED_BYTE, IMG_DATA(img));
+		             GL_BGRA, GL_UNSIGNED_BYTE, pixels);
 		im->tex_w = w;
 		im->tex_h = h;
 	}
@@ -147,37 +181,57 @@ static void Stencil_Box(const PUGLNODE *g, const PUGLXFORM *m, GLint level, int 
 }
 
 /***********************************************************************
+**  The blend function of a mode - for premultiplied colour, which is
+**  what the textures hold and what glColor4f(a, a, a, a) keeps them.
+***********************************************************************/
+static REBCNT Blend_Now;   // the mode set last, so it is set only on a change
+
+static void Set_Blend(REBCNT mode)
+{
+	if (mode == Blend_Now) return;
+	Blend_Now = mode;
+	switch (mode) {
+	case W_PUGL_BLEND_ADD:      glBlendFunc(GL_ONE,       GL_ONE);                 break;
+	case W_PUGL_BLEND_MULTIPLY: glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA); break;
+	case W_PUGL_BLEND_SCREEN:   glBlendFunc(GL_ONE,       GL_ONE_MINUS_SRC_COLOR); break;
+	default:                    glBlendFunc(GL_ONE,       GL_ONE_MINUS_SRC_ALPHA); break;
+	}
+}
+
+/***********************************************************************
 **  A list of images under `parent` - the transform into window pixels -
-**  at `alpha` opacity, drawn where the stencil is `level`: inside every
-**  clipping group around it.
+**  at `alpha` opacity, by `blend` where they do not set their own, drawn
+**  where the stencil is `level`: inside every clipping group around it.
 **
 **  A group is drawn where it is in the list, its own list under its
 **  transform and its opacity. A clipping group marks its box one level
 **  up, draws what is in it at that level, and takes the mark back.
 ***********************************************************************/
-static void Draw_List(PUGLNODE *im, const PUGLXFORM *parent, float alpha, GLint level,
-                      float win_w, float win_h)
+static void Draw_List(PUGLNODE *im, const PUGLXFORM *parent, float alpha, REBCNT blend,
+                      GLint level, float win_w, float win_h)
 {
 	for (; im; im = (PUGLNODE*)im->next) {
 		REBSER   *img = (REBSER*)im->image;
 		PUGLXFORM m;
 		float     a;
+		REBCNT    b;
 		REBINT    iw, ih;
 
 		if (!im->visible) continue;
 		Pugl_Node_Xform(im, &m);
 		Pugl_Xform_Mul(&m, parent, &m);
 		a = alpha * (float)im->opacity;
+		b = im->blend ? im->blend : blend;
 
 		if (im->group) {
 			REBOOL clips = (im->w > 0 || im->h > 0) && level < 255;
 			if (!clips) {
-				Draw_List((PUGLNODE*)im->children, &m, a, level, win_w, win_h);
+				Draw_List((PUGLNODE*)im->children, &m, a, b, level, win_w, win_h);
 				continue;
 			}
 			Stencil_Box(im, &m, level, +1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level + 1, 0xFF);
-			Draw_List((PUGLNODE*)im->children, &m, a, level + 1, win_w, win_h);
+			Draw_List((PUGLNODE*)im->children, &m, a, b, level + 1, win_w, win_h);
 			Stencil_Box(im, &m, level + 1, -1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level, 0xFF);
 			continue;
@@ -192,7 +246,9 @@ static void Draw_List(PUGLNODE *im, const PUGLXFORM *parent, float alpha, GLint 
 		if (a <= 0.0f) continue;   // uploaded all the same, for when it shows
 
 		Load_Xform(&m);
-		glColor4f(1.0f, 1.0f, 1.0f, a);   // modulates the texture's own alpha
+		Set_Blend(b);
+		// All four: the colour is premultiplied, so it fades with the alpha.
+		glColor4f(a, a, a, a);
 		Quad((float)(im->w > 0 ? im->w : iw), (float)(im->h > 0 ? im->h : ih));
 	}
 }
@@ -237,14 +293,14 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	Blend_Now = (REBCNT)-1;   // whatever GL has, it is set at the first image
 
 	// Level 0 is the whole window, until a clipping group says otherwise.
 	glEnable(GL_STENCIL_TEST);
 	glStencilFunc(GL_EQUAL, 0, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 
-	Draw_List((PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, 0,
+	Draw_List((PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, W_PUGL_BLEND_NORMAL, 0,
 	          (float)area.width, (float)area.height);
 
 	glDisable(GL_STENCIL_TEST);

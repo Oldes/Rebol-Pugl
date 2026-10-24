@@ -1050,7 +1050,8 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	case W_PUGL_ARG_ROTATION:
 	case W_PUGL_ARG_SCALE:
 	case W_PUGL_ARG_PIVOT:
-	case W_PUGL_ARG_OPACITY: return TRUE;
+	case W_PUGL_ARG_OPACITY:
+	case W_PUGL_ARG_BLEND:   return TRUE;
 	}
 	return FALSE;
 }
@@ -1179,6 +1180,13 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_PERCENT;
 		break;
 
+	// Its own - none when it goes by its group's.
+	case W_PUGL_ARG_BLEND:
+		if (!im->blend) { *type = RXT_NONE; break; }
+		arg->int32a = (int)Pugl_blend_words[im->blend];
+		*type = RXT_WORD;
+		break;
+
 	default:
 		return PE_BAD_SELECT;
 	}
@@ -1263,6 +1271,15 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		else return PE_BAD_SET_TYPE;
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
+		break; }
+
+	case W_PUGL_ARG_BLEND: {
+		REBCNT mode;
+		if (*type == RXT_NONE) { im->blend = 0; break; }
+		if (*type != RXT_WORD) return PE_BAD_SET_TYPE;
+		mode = RL_FIND_WORD(Pugl_blend_words, (REBCNT)arg->int32a);
+		if (!mode) return PE_BAD_SET;   // not one of the modes
+		im->blend = mode;
 		break; }
 
 	// Only a flag: hover is kept either way, so turning it on while the

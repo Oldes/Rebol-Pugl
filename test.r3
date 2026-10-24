@@ -483,6 +483,11 @@ img2/opacity: 50%
 print ["opacity 50%:     " img2/opacity "(expected 50%)"]
 img2/opacity: 0.25
 print ["a decimal:       " img2/opacity "(expected 25%)"]
+img2/opacity: 0
+print ["integer 0:       " img2/opacity "(expected 0%)"]
+img2/opacity: 1
+print ["integer 1:       " img2/opacity "(expected 100%)"]
+print ["integer 2:       " error? try [img2/opacity: 2] "(expected true - out of range)"]
 img2/opacity: 100%
 print ["too much:        " error? try [img2/opacity: 150%]]
 print ["below zero:      " error? try [img2/opacity: -0.1]]
@@ -525,6 +530,53 @@ img2/rotation: 20
 viewport/rotation: 30
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+
+;;=============================================================================
+print as-yellow "^/== Blending"
+;;=============================================================================
+
+;; How an image is drawn over what is below. A group's `blend` is for all
+;; in it which do not set their own; none - the default - is the group's,
+;; and `normal` at the top.
+print ["blend:           " mold img1/blend "(expected none - its group's)"]
+print ["of a group:      " mold grp/blend "(expected none)"]
+print ["a bad word:      " error? try [img1/blend: 'darken]]
+print ["a bad type:      " error? try [img1/blend: 1]]
+
+;; Three squares, red, green and blue, overlapping over the big gradient.
+mix: add-group stage 60x170
+sq-red:   add-image mix make image! [48x48 255.0.0] 0x0
+sq-green: add-image mix make image! [48x48 0.255.0] 24x0
+sq-blue:  add-image mix make image! [48x48 0.0.255] 12x20
+center-content
+mix/blend: 'add
+print ["set:             " mold mix/blend "(expected add)"]
+print ["its squares:     " mold sq-red/blend "(expected none - they go by the group)"]
+
+;; WATCH: three overlapping squares on the gradient, ADDED - yellow, cyan
+;; and magenta where two overlap and white where all three do; then
+;; MULTIPLIED - the gradient through coloured filters, black where they
+;; overlap; then SCREENED - lighter, like add but softer; then NORMAL -
+;; plain squares, the last one on top.
+wait 0.5
+mix/blend: 'multiply  wait 0.5
+mix/blend: 'screen    wait 0.5
+mix/blend: 'normal    wait 0.5
+
+;; Its own wins over the group's: the blue one stays normal while the
+;; group adds.
+mix/blend: 'add
+sq-blue/blend: 'normal
+print ["its own:         " mold sq-blue/blend "(expected normal)"]
+wait 0.5
+sq-blue/blend: none
+print ["back to group's: " mold sq-blue/blend "(expected none)"]
+
+;; WATCH: added squares fade - with premultiplied colour, a faded square
+;; adds less, rather than adding all its colour at no alpha.
+repeat i 10 [mix/opacity: 1 - (i / 10)  wait 0.03]
+repeat i 10 [mix/opacity: i / 10  wait 0.03]
+;; Left adding for the events.
 
 ;;=============================================================================
 print as-yellow "^/== An icon"
