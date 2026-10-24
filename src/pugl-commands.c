@@ -159,6 +159,9 @@ static void Detach_Image(PUGLIMG *im)
 	}
 	Retire_Texture(win, im->texture);
 	Window_Changed(win);
+	// A removed image reports nothing, not even a `leave`; the next move
+	// reports `enter` on whatever is there instead.
+	if (win->hover == im) win->hover = NULL;
 
 	im->win     = NULL;
 	im->next    = NULL;
@@ -237,6 +240,7 @@ static void Close_Window(PUGLWIN *pv)
 	// Its images go with it. Their textures went with the GL context, so
 	// nothing is retired (pv->view is already NULL), and the list of the
 	// ones retired earlier is only memory now.
+	pv->hover = NULL;
 	while (pv->images) Detach_Image((PUGLIMG*)pv->images);
 	if (pv->dead) FREE_MEM(pv->dead);
 	pv->dead = NULL;
@@ -271,9 +275,10 @@ static REBYTE Modifier_Bits(PuglMods mods)
 	return bits;
 }
 
-// Appends one event! to the block.
-static void Append_Event(REBSER *blk, REBCNT *at, PUGLWIN *pv,
-                         REBCNT type, REBYTE flags, u32 data)
+// Appends one event! to the block, with `source` - a window or an image
+// handle - as its source.
+static void Append_Event_Of(REBSER *blk, REBCNT *at, REBHOB *source,
+                            REBCNT type, REBYTE flags, u32 data)
 {
 	REBEVT ev;
 	RXIARG val;
@@ -281,7 +286,7 @@ static void Append_Event(REBSER *blk, REBCNT *at, PUGLWIN *pv,
 	CLEARS(&ev);
 	ev.type  = (u8)type;
 	ev.model = EVM_HANDLE;   // the source is our handle, and the GC marks it
-	ev.hob   = pv->hob;
+	ev.hob   = source;
 	ev.flags = flags;
 	ev.data  = data;
 
@@ -290,9 +295,64 @@ static void Append_Event(REBSER *blk, REBCNT *at, PUGLWIN *pv,
 	RL_SET_VALUE(blk, (*at)++, val, RXT_EVENT);
 }
 
+#define Append_Event(blk, at, pv, type, flags, data) \
+	Append_Event_Of(blk, at, (pv)->hob, type, flags, data)
+
 #define XY_DATA(x, y) ((((u32)((REBINT)(y) & 0xffff)) << 16) | ((u32)((REBINT)(x) & 0xffff)))
 #define HAS_XY        (1 << EVF_HAS_XY)
 #define HAS_CODE      (1 << EVF_HAS_CODE)
+
+/***********************************************************************
+**  The topmost visible image under a point of the window, or NULL.
+**  The list is in drawing order, so the last match is the one on top.
+**  The right and bottom edges are outside, so images laid edge to edge
+**  never both claim a point.
+***********************************************************************/
+static PUGLIMG *Image_At(PUGLWIN *win, REBINT x, REBINT y)
+{
+	PUGLIMG *im, *top = NULL;
+	for (im = (PUGLIMG*)win->images; im; im = (PUGLIMG*)im->next) {
+		REBINT w, h;
+		if (!im->visible || !im->image) continue;
+		w = im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image);
+		h = im->h > 0 ? im->h : (REBINT)IMG_HIGH((REBSER*)im->image);
+		if (x >= im->x && y >= im->y && x < im->x + w && y < im->y + h) top = im;
+	}
+	return top;
+}
+
+/***********************************************************************
+**  `enter` and `leave` per image, for the images with `track?` on.
+**
+**  Worked out from the pointer's position whenever a pointer event is
+**  converted: when the topmost image under it changes, the old one gets
+**  `leave` where it was last seen over it, and the new one `enter` - in
+**  that order, and before the window's own event, the same order
+**  Rebol-GUI reports for widgets. `inside` FALSE is the pointer leaving
+**  the window, which leaves whatever it was over.
+**
+**  Hover is kept for every image, tracked or not - `hover?` reads it,
+**  and an untracked image on top still covers a tracked one below.
+**  It is as of the last event: an image moved under a pointer which
+**  stays still is not entered until the pointer moves.
+***********************************************************************/
+static void Hover_To(REBSER *blk, REBCNT *at, PUGLWIN *win,
+                     REBINT x, REBINT y, REBOOL inside)
+{
+	PUGLIMG *now = inside ? Image_At(win, x, y) : NULL;
+	PUGLIMG *was = (PUGLIMG*)win->hover;
+
+	if (now != was) {
+		if (was && was->track && was->hob)
+			Append_Event_Of(blk, at, was->hob, EVT_LEAVE, HAS_XY,
+			                XY_DATA(win->hover_x, win->hover_y));
+		if (now && now->track && now->hob)
+			Append_Event_Of(blk, at, now->hob, EVT_ENTER, HAS_XY, XY_DATA(x, y));
+		win->hover = now;
+	}
+	win->hover_x = x;
+	win->hover_y = y;
+}
 
 static const REBCNT Down_Types[3] = { EVT_DOWN, EVT_ALT_DOWN, EVT_AUX_DOWN };
 static const REBCNT Up_Types[3]   = { EVT_UP,   EVT_ALT_UP,   EVT_AUX_UP   };
@@ -312,6 +372,7 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 	case PUGL_BUTTON_RELEASE:
 		// Primary, secondary, middle - nothing above is reported yet.
 		if (e->button.button > 2) break;
+		Hover_To(blk, at, pv, (REBINT)e->button.x, (REBINT)e->button.y, TRUE);
 		Append_Event(blk, at, pv,
 			(e->type == PUGL_BUTTON_PRESS ? Down_Types : Up_Types)[e->button.button],
 			HAS_XY | Modifier_Bits(e->button.state),
@@ -319,15 +380,23 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		break;
 
 	case PUGL_MOTION:
+		Hover_To(blk, at, pv, (REBINT)e->motion.x, (REBINT)e->motion.y, TRUE);
 		Append_Event(blk, at, pv, EVT_MOVE,
 			HAS_XY | Modifier_Bits(e->motion.state),
 			XY_DATA(e->motion.x, e->motion.y));
 		break;
 
+	// The window's own enter goes before an image's, and its leave after:
+	// the pointer is inside the window whenever it is over an image.
 	case PUGL_POINTER_IN:
+		Append_Event(blk, at, pv, EVT_ENTER,
+			HAS_XY, XY_DATA(e->crossing.x, e->crossing.y));
+		Hover_To(blk, at, pv, (REBINT)e->crossing.x, (REBINT)e->crossing.y, TRUE);
+		break;
+
 	case PUGL_POINTER_OUT:
-		Append_Event(blk, at, pv,
-			e->type == PUGL_POINTER_IN ? EVT_ENTER : EVT_LEAVE,
+		Hover_To(blk, at, pv, (REBINT)e->crossing.x, (REBINT)e->crossing.y, FALSE);
+		Append_Event(blk, at, pv, EVT_LEAVE,
 			HAS_XY, XY_DATA(e->crossing.x, e->crossing.y));
 		break;
 
@@ -496,9 +565,10 @@ COMMAND cmd_pugl_poll_events(RXIFRM *frm, void *ctx)
 		Pugl_Dropped_Events = 0;
 	}
 
-	// A configure can become two events (resize and offset).
+	// A configure can become two events (resize and offset), and a pointer
+	// event three (an image's leave, another's enter, and its own).
 	count = Pugl_Event_Count();
-	blk = (REBSER*)RL_MAKE_BLOCK(count * 2);
+	blk = (REBSER*)RL_MAKE_BLOCK(count * 3);
 	if (!blk) RETURN_ERROR(ERR_NO_HANDLE);
 
 	RL_PROTECT_GC(blk, 1);
@@ -864,6 +934,16 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_LOGIC;
 		break;
 
+	case W_PUGL_ARG_TRACKQ:
+		arg->int32a = im->track ? 1 : 0;
+		*type = RXT_LOGIC;
+		break;
+
+	case W_PUGL_ARG_HOVERQ:
+		arg->int32a = (((PUGLWIN*)im->win)->hover == im) ? 1 : 0;
+		*type = RXT_LOGIC;
+		break;
+
 	case W_PUGL_ARG_WINDOW:
 		Set_Handle_Arg(arg, ((PUGLWIN*)im->win)->hob);
 		*type = RXT_HANDLE;
@@ -914,6 +994,13 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (*type != RXT_LOGIC) return PE_BAD_SET_TYPE;
 		im->visible = arg->int32a ? TRUE : FALSE;
 		break;
+
+	// Only a flag: hover is kept either way, so turning it on while the
+	// pointer is already over the image reports nothing until it leaves.
+	case W_PUGL_ARG_TRACKQ:
+		if (*type != RXT_LOGIC) return PE_BAD_SET_TYPE;
+		im->track = arg->int32a ? TRUE : FALSE;
+		return PE_OK;   // nothing to redraw
 
 	default:
 		return PE_BAD_SET;

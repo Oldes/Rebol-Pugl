@@ -111,6 +111,8 @@ Takes an image out of its window
 /offset           pair!               pair!                         "Position of its top-left corner in the window"
 /size             pair!               pair!                         "Size it is drawn at - scaled to it; a zero axis is the image's own"
 /visible?         logic!              logic!                        "Whether it is drawn"
+/track?           logic!              logic!                        "Whether `enter` and `leave` are reported for it, with the image as the source; off by default"
+/hover?           logic!              none                          "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
 /window           handle!             none                          "The window it is shown in; none once removed"
 ```
 

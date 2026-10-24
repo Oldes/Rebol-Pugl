@@ -62,6 +62,12 @@ typedef struct Pugl_Window_Context {
 	// draws - so they are deleted at the start of the next draw.
 	REBCNT *dead;
 	REBCNT  dead_count, dead_size;
+
+	// The image the pointer is over (PUGLIMG*), worked out when the queued
+	// pointer events are converted - and where it was last seen over it,
+	// for that image's `leave`.
+	void   *hover;
+	REBINT  hover_x, hover_y;
 } PUGLWIN;
 
 // An image shown in a window. The image! itself is kept in the handle's
@@ -75,6 +81,7 @@ typedef struct Pugl_Image_Context {
 	REBINT  x, y;    // offset in the window
 	REBINT  w, h;    // size it is drawn at; 0 for the image's own
 	REBCNT  visible;
+	REBCNT  track;   // `track?`: enter and leave are reported for it
 	REBCNT  texture;      // GL texture name, 0 before the first draw
 	REBINT  tex_w, tex_h; // the size it was made with
 	REBCNT  dirty;        // the pixels must be uploaded again
@@ -104,6 +111,8 @@ handles: [
 		offset   pair!     pair!     "Position of its top-left corner in the window"
 		size     pair!     pair!     "Size it is drawn at - scaled to it; a zero axis is the image's own"
 		visible? logic!    logic!    "Whether it is drawn"
+		track?   logic!    logic!    "Whether `enter` and `leave` are reported for it, with the image as the source; off by default"
+		hover?   logic!    none      "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
 		window   handle!   none      "The window it is shown in; none once removed"
 	]
 ]

@@ -157,6 +157,14 @@ print ["offset:          " img1/offset "(expected 20x20)"]
 print ["size:            " img1/size "(expected 256x256 - its own)"]
 print ["visible?:        " img1/visible? "(expected true)"]
 print ["its window:      " img1/window == window "(expected true)"]
+print ["track?:          " img1/track? "(expected false - off by default)"]
+print ["hover?:          " img1/hover? "(expected false)"]
+img1/track?: true
+print ["track? set:      " img1/track? "(expected true)"]
+img1/track?: false
+print ["track? cleared:  " img1/track? "(expected false)"]
+print ["track? a string: " error? try [img1/track?: "x"]]
+print ["read-only hover?:" error? try [img1/hover?: true]]
 
 ;; The same image twice: scaled to twice its size, and at its own over pic.
 img2: add-image/size window small 300x40 128x128
@@ -217,6 +225,7 @@ print ["remove-image:    " remove-image img3 "(expected true)"]
 print ["images:          " length? window/images "(expected 2)"]
 print ["removed:         " img3 "(expected removed)"]
 print ["offset after:    " mold img3/offset "(expected none)"]
+print ["hover? after:    " mold img3/hover? "(expected none)"]
 print ["removing twice:  " remove-image img3 "(expected true)"]
 print ["set refused:     " error? try [img3/offset: 0x0]]
 print ["redraw refused:  " error? try [redraw img3]]
@@ -269,6 +278,8 @@ Move the mouse over the window, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
 A left click on an image repaints it in a new colour - the topmost one
 under the pointer - and reports where on it the click was.
+Both images report `enter` and `leave` themselves (as the event source);
+the window reports its own when the pointer crosses its edge.
 Resize the window by dragging its edge - the images stay where they are,
 unstretched, while dragging.
 ESCAPE or the close button ends the test.
@@ -278,6 +289,11 @@ ESCAPE or the close button ends the test.
 ;; of them - only report a move once it has travelled a bit.
 last-move: 0x0
 pressed: none   ;; the button between its `down` and its `up`
+over:    none   ;; the tracked image between its `enter` and its `leave`
+
+;; Per image, on demand: only these two report `enter` and `leave`.
+img1/track?: true
+img2/track?: true
 
 ;; The topmost image under a point, or none - the last one added is on top.
 image-at: function [point [pair!]][
@@ -292,7 +308,7 @@ image-at: function [point [pair!]][
 	none
 ]
 
-report: func [event /local type position d hit][
+report: func [event /local type position d hit src][
 	type:     event/type
 	position: event/offset
 
@@ -302,8 +318,35 @@ report: func [event /local type position d hit][
 		last-move: position
 	]
 
-	;; Every event names the window it came from.
-	unless event/source == window [print as-red "!! event from another window"]
+	;; Every event names the window it came from - or, for `enter` and
+	;; `leave` of a tracked image, that image.
+	src: event/source
+	either src/type = 'pugl-image [
+		unless find [enter leave] type [print as-red ["!!" type "from an image"]]
+		unless src/track? [print as-red "!! an image not tracked"]
+		unless src/window == window [print as-red "!! image of another window"]
+		;; Each enter is answered by one leave of the same image, before
+		;; another image is entered.
+		either type = 'enter [
+			if over [print as-red ["!! enter while over" over]]
+			unless src == image-at position [
+				print as-red ["!! entered an image not on top at" position]
+			]
+			over: src
+		][
+			unless over == src [print as-red "!! leave of an image not entered"]
+			over: none
+		]
+		print [
+			as-green pad form type 12
+			pad mold position 12 "image:" src
+		]
+		exit
+	][
+		unless event/source == window [print as-red "!! event from another window"]
+	]
+	;; The window's own leave comes after its image's.
+	if all [type = 'leave  over] [print as-red ["!! left the window while over" over]]
 
 	;; Each press must be answered by exactly one release of the same kind.
 	switch type [
