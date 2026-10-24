@@ -127,6 +127,11 @@ words: [
 		multiply    ;; what is below multiplied by it - darker, like a filter
 		screen      ;; the inverse of multiply - lighter, never past white
 	]
+	;; What `index` takes besides a number.
+	place: [
+		top         ;; drawn last in its list - above the rest of it
+		bottom      ;; drawn first - below the rest of it
+	]
 ]
 
 ;; ---------------------------------------------------------------------------
@@ -161,6 +166,7 @@ handles: [
 		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its top-left (default 0x0)"
 		opacity  percent!  [percent! decimal! integer!] "How opaque it is, 0% to 100% (default 100%); still there for the pointer at 0%"
 		blend    word!     [word! none!] "How it is drawn over what is below: normal, add, multiply or screen; none (default) for its group's"
+		index    integer!  [integer! word!] "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it"
 	]
 	group: [
 		"Pugl group handle - images and groups moved, hidden and hovered together"
@@ -178,6 +184,7 @@ handles: [
 		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its origin (default 0x0)"
 		opacity  percent!  [percent! decimal! integer!] "How opaque all in it is, 0% to 100% (default 100%), multiplied with their own"
 		blend    word!     [word! none!] "How what is in it is drawn, where it does not say itself: normal, add, multiply or screen; none (default) for its own group's"
+		index    integer!  [integer! word!] "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it, with all in it"
 	]
 ]
 

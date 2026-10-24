@@ -731,6 +731,23 @@ COMMAND cmd_pugl_redraw(RXIFRM *frm, void *ctx)
 
 
 /***********************************************************************
+**  Moves a node to place `at` (1-based) in its own list - past the end
+**  is the end, so the top.
+***********************************************************************/
+static void Move_Node(PUGLNODE *n, REBINT at)
+{
+	PUGLNODE **list = Node_List((PUGLWIN*)n->win, (PUGLNODE*)n->parent);
+	PUGLNODE **link;
+
+	for (link = list; *link; link = (PUGLNODE**)&(*link)->next) {
+		if (*link == n) { *link = (PUGLNODE*)n->next; break; }
+	}
+	for (link = list; *link && at > 1; link = (PUGLNODE**)&(*link)->next) at--;
+	n->next = *link;
+	*link = n;
+}
+
+/***********************************************************************
 **  Appends a new node to the end of its list - drawn above everything
 **  added there before it - and locks its handle: the list points at it.
 ***********************************************************************/
@@ -1051,7 +1068,8 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	case W_PUGL_ARG_SCALE:
 	case W_PUGL_ARG_PIVOT:
 	case W_PUGL_ARG_OPACITY:
-	case W_PUGL_ARG_BLEND:   return TRUE;
+	case W_PUGL_ARG_BLEND:
+	case W_PUGL_ARG_INDEX:   return TRUE;
 	}
 	return FALSE;
 }
@@ -1180,6 +1198,15 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_PERCENT;
 		break;
 
+	// 1-based, in drawing order - like a series index.
+	case W_PUGL_ARG_INDEX: {
+		PUGLNODE *n = *Node_List((PUGLWIN*)im->win, (PUGLNODE*)im->parent);
+		REBINT    at = 1;
+		for (; n && n != im; n = (PUGLNODE*)n->next) at++;
+		arg->int64 = at;
+		*type = RXT_INTEGER;
+		break; }
+
 	// Its own - none when it goes by its group's.
 	case W_PUGL_ARG_BLEND:
 		if (!im->blend) { *type = RXT_NONE; break; }
@@ -1271,6 +1298,22 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		else return PE_BAD_SET_TYPE;
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
+		break; }
+
+	// Moved within its list: out and back in at the place asked for. The
+	// pointer finds what is now on top at its next move.
+	case W_PUGL_ARG_INDEX: {
+		REBINT at;
+		if (*type == RXT_INTEGER) {
+			at = arg->int64 < 1 ? 1 : (arg->int64 > 0x7FFFFFFF ? 0x7FFFFFFF : (REBINT)arg->int64);
+		} else if (*type == RXT_WORD) {
+			switch (RL_FIND_WORD(Pugl_place_words, (REBCNT)arg->int32a)) {
+			case W_PUGL_PLACE_TOP:    at = 0x7FFFFFFF; break;
+			case W_PUGL_PLACE_BOTTOM: at = 1;          break;
+			default: return PE_BAD_SET;
+			}
+		} else return PE_BAD_SET_TYPE;
+		Move_Node(im, at);
 		break; }
 
 	case W_PUGL_ARG_BLEND: {

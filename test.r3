@@ -403,6 +403,8 @@ print ["group removed:   " tmp "(expected 0#... removed)"]
 print ["its image too:   " tmp-img "(expected 0#... removed)"]
 print ["images after:    " mold tmp/images "(expected none)"]
 print ["rotation after:  " mold tmp/rotation "(expected none)"]
+print ["index after:     " mold tmp/index "(expected none)"]
+print ["move refused:    " error? try [tmp/index: 'top]]
 print ["add to removed:  " error? try [add-image tmp dot 0x0]]
 print ["left in group:   " length? grp/images "(expected 3)"]
 center-content
@@ -576,7 +578,42 @@ print ["back to group's: " mold sq-blue/blend "(expected none)"]
 ;; adds less, rather than adding all its colour at no alpha.
 repeat i 10 [mix/opacity: 1 - (i / 10)  wait 0.03]
 repeat i 10 [mix/opacity: i / 10  wait 0.03]
-;; Left adding for the events.
+;;=============================================================================
+print as-yellow "^/== Depth"
+;;=============================================================================
+
+;; `index` is the place in its own list - its window's or its group's - in
+;; drawing order: 1 at the bottom. Setting it moves it there; a number is
+;; clamped like a series index, and top and bottom are its ends.
+mix/blend: 'normal   ;; so that what is on top shows
+print ["order:           " sq-red/index sq-green/index sq-blue/index "(expected 1 2 3)"]
+print ["of a group:      " mix/index = length? stage/images "(expected true - added last)"]
+sq-red/index: 'top
+print ["red on top:      " sq-red/index "(expected 3)"]
+print ["the rest moved:  " sq-green/index sq-blue/index "(expected 1 2)"]
+print ["in its list:     " (last mix/images) == sq-red "(expected true)"]
+sq-red/index: 'bottom
+print ["red at bottom:   " sq-red/index "(expected 1)"]
+sq-red/index: 2
+print ["red in between:  " sq-red/index "(expected 2)"]
+sq-red/index: 99
+print ["past the end:    " sq-red/index "(expected 3 - clamped)"]
+sq-red/index: -5
+print ["before the head: " sq-red/index "(expected 1 - clamped)"]
+print ["a bad word:      " error? try [sq-red/index: 'middle]]
+print ["a bad type:      " error? try [sq-red/index: 1.5]]
+
+;; WATCH: each square comes to the top in turn.
+foreach square reduce [sq-green sq-blue sq-red][
+	square/index: 'top
+	wait 0.3
+]
+;; A group moves with all in it: the squares go below the big gradient,
+;; and come back.
+mix/index: 'bottom  wait 0.3
+print ["group at bottom: " mix/index "(expected 1)"]
+mix/index: 'top
+wait 0.3
 
 ;;=============================================================================
 print as-yellow "^/== An icon"
@@ -625,8 +662,8 @@ print {
 Move the mouse over the window, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
 A left click on an image repaints it - the topmost one under the pointer -
-with its gradient turned another way and a new tint, and reports where on
-it the click was.
+with its gradient turned another way and a new tint, brings it to the top
+with the groups it is in, and reports where on it the click was.
 The two big images, the group of white squares, its lower square's group
 and the top-left square report `enter` and `leave` themselves (as the event
 source); the window reports its own when the pointer crosses its edge.
@@ -801,6 +838,13 @@ report: func [event /local type position d hit src][
 				(local-of hit position) * hit/image/size / hit/size]
 			paint hit/image random 256
 			redraw hit
+			;; On top of everything: itself in its list, and each group
+			;; it is in, in theirs.
+			foreach node chain-of hit [node/index: 'top]
+			unless all [
+				hit/index = length? either hit/parent [hit/parent/images][window/images]
+				hit == image-at position
+			][print as-red "!! not on top after being raised"]
 		][
 			print "  on no image"
 		]
