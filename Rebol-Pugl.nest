@@ -112,6 +112,13 @@ files: [
 	flag: "-mmacos-version-min=10.9"
 	files: [%pugl/src/mac.m]
 	frameworks: [Cocoa AppKit Foundation CoreVideo]
+	;; Objective-C class names are process-global, unlike C symbols: two
+	;; binaries linking pugl (this .rebx, a Rebol with pugl embedded, a
+	;; plugin...) would both define them, and the runtime keeps only one.
+	;; pugl has no namespace macro for them, so they are renamed here.
+	define: PuglWindow=RebolPuglWindow
+	define: PuglWrapperView=RebolPuglWrapperView
+	define: PuglWindowDelegate=RebolPuglWindowDelegate
 ]
 
 ;- generate main extension header --------------------------------
@@ -125,7 +132,7 @@ make-extension: [
 		%src/pugl-commands.c
 		%src/pugl-draw.c
 	]
-	;; the window icon - pugl has no API for it
+	;- the window icon - pugl has no API for it
 	#if Windows? [ files: [%src/pugl-icon-win.c] ]
 	#if Linux?   [ files: [%src/pugl-icon-x11.c] ]
 	#if macOS?   [ files: [%src/pugl-icon-mac.m] ]
@@ -135,7 +142,10 @@ make-extension: [
 backend-stub: [
 	#if Windows? [ files: [%pugl/src/win_stub.c] ]
 	#if Linux?   [ files: [%pugl/src/x11_stub.c] ]
-	#if macOS?   [ files: [%pugl/src/mac_stub.m] ]
+	#if macOS?   [
+		files: [%pugl/src/mac_stub.m]
+		define: PuglStubView=RebolPuglStubView  ;; see the macOS block above
+	]
 ]
 backend-gl: [
 	#if Windows? [ files: [%pugl/src/win_gl.c] libraries: [%opengl32] ]
@@ -144,6 +154,7 @@ backend-gl: [
 		files: [%pugl/src/mac_gl.m]
 		frameworks: [OpenGL]
 		define: GL_SILENCE_DEPRECATION
+		define: PuglOpenGLView=RebolPuglOpenGLView  ;; see the macOS block above
 	]
 ]
 example: [
