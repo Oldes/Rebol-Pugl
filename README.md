@@ -122,6 +122,10 @@ Makes a group in a window or a group and returns its handle
 /hover?           logic!              none                          "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
 /window           handle!             none                          "The window it is shown in; none once removed"
 /parent           handle!             none                          "The group it is in; none at the window's top level"
+/rotation         decimal!            [decimal! integer!]           "Degrees it is turned around its pivot, clockwise (default 0.0)"
+/scale            [decimal! pair!]    [decimal! integer! pair!]     "Scale around its pivot - one for both axes, or a pair for each (default 1.0); a pair! only while the two differ"
+/pivot            pair!               pair!                         "Point it is turned and scaled around, in its own units from its top-left (default 0x0)"
+/opacity          percent!            [percent! decimal! integer!]  "How opaque it is, 0% to 100% (default 100%); still there for the pointer at 0%"
 ```
 
 #### __GROUP__ - Pugl group handle - images and groups moved, hidden and hovered together
@@ -136,6 +140,10 @@ Makes a group in a window or a group and returns its handle
 /images           block!              none                          "Images and groups added to it, in drawing order"
 /window           handle!             none                          "The window it is shown in; none once removed"
 /parent           handle!             none                          "The group it is in; none at the window's top level"
+/rotation         decimal!            [decimal! integer!]           "Degrees it - and all in it - is turned around its pivot, clockwise (default 0.0)"
+/scale            [decimal! pair!]    [decimal! integer! pair!]     "Scale around its pivot, of all in it - one for both axes, or a pair for each (default 1.0)"
+/pivot            pair!               pair!                         "Point it is turned and scaled around, in its own units from its origin (default 0x0)"
+/opacity          percent!            [percent! decimal! integer!]  "How opaque all in it is, 0% to 100% (default 100%), multiplied with their own"
 ```
 
 

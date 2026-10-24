@@ -36,6 +36,9 @@ PuglStatus Pugl_Setup_Backend(PuglView *view)
 	puglSetViewHint(view, PUGL_CONTEXT_VERSION_MINOR, 1);
 	puglSetViewHint(view, PUGL_CONTEXT_PROFILE,       PUGL_OPENGL_COMPATIBILITY_PROFILE);
 	puglSetViewHint(view, PUGL_DOUBLE_BUFFER,         PUGL_TRUE);
+	// Clipping is done with the stencil: a box turned with its group is no
+	// box the scissor can cut. Without one, nothing is clipped.
+	puglSetViewHint(view, PUGL_STENCIL_BITS,          8);
 	return puglSetBackend(view, puglGlBackend());
 }
 
@@ -79,67 +82,118 @@ static void Upload(PUGLNODE *im, REBSER *img, REBINT w, REBINT h)
 }
 
 /***********************************************************************
-**  The box drawing is clipped to, in window pixels from the top left -
-**  x0,y0 inside, x1,y1 just outside.
+**  Loads a transform as the modelview matrix - each node's whole one,
+**  computed on the CPU, so nesting is not limited by GL's matrix stack.
 ***********************************************************************/
-typedef struct { REBINT x0, y0, x1, y1; } CLIP;
-
-static REBINT Window_High;   // for the scissor box, which GL has bottom-up
-
-static void Set_Scissor(const CLIP *c)
+static void Load_Xform(const PUGLXFORM *m)
 {
-	glScissor(c->x0, Window_High - c->y1, c->x1 - c->x0, c->y1 - c->y0);
+	GLfloat g[16] = {
+		(GLfloat)m->a, (GLfloat)m->b, 0, 0,
+		(GLfloat)m->c, (GLfloat)m->d, 0, 0,
+		0,             0,             1, 0,
+		(GLfloat)m->e, (GLfloat)m->f, 0, 1
+	};
+	glLoadMatrixf(g);
+}
+
+static void Quad(float w, float h)
+{
+	glBegin(GL_QUADS);
+	glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, 0.0f);
+	glTexCoord2f(1.0f, 0.0f); glVertex2f(w,    0.0f);
+	glTexCoord2f(1.0f, 1.0f); glVertex2f(w,    h);
+	glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, h);
+	glEnd();
 }
 
 /***********************************************************************
-**  A list of images, its origin at ox,oy - a group is drawn where it is
-**  in the list, its own images in their order, relative to it. A group
-**  with a size narrows the clip box for what is in it - the scissor is
-**  set for it, and back once it is drawn.
+**  A clipping group's box, into the stencil only: `delta` +1 marks it,
+**  -1 takes the mark back. Only where the clips around it already let
+**  through (the stencil is `level`), so marked is inside all of them.
+**  A zero axis is not clipped - "everywhere", as far as the window goes.
 ***********************************************************************/
-static void Draw_List(PUGLNODE *im, REBINT ox, REBINT oy, const CLIP *clip)
+static void Stencil_Box(const PUGLNODE *g, const PUGLXFORM *m, GLint level, int delta,
+                        float win_w, float win_h)
+{
+	float w = g->w > 0 ? (float)g->w : 0.0f;
+	float h = g->h > 0 ? (float)g->h : 0.0f;
+
+	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+	glDisable(GL_TEXTURE_2D);
+	glStencilFunc(GL_EQUAL, level, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, delta > 0 ? GL_INCR : GL_DECR);
+
+	if (g->w > 0 && g->h > 0) {
+		Load_Xform(m);
+		Quad(w, h);
+	} else {
+		// One axis only: a band along the other, long enough to cross the
+		// window whichever way it is turned.
+		// Not `far`: windows.h defines it (empty), and <pugl/gl.h> brings it in.
+		float reach = 4.0f * (win_w + win_h);
+		Load_Xform(m);
+		glBegin(GL_QUADS);
+		if (g->w > 0) {
+			glVertex2f(0, -reach); glVertex2f(w, -reach); glVertex2f(w, reach); glVertex2f(0, reach);
+		} else {
+			glVertex2f(-reach, 0); glVertex2f(reach, 0); glVertex2f(reach, h); glVertex2f(-reach, h);
+		}
+		glEnd();
+	}
+
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	glEnable(GL_TEXTURE_2D);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
+/***********************************************************************
+**  A list of images under `parent` - the transform into window pixels -
+**  at `alpha` opacity, drawn where the stencil is `level`: inside every
+**  clipping group around it.
+**
+**  A group is drawn where it is in the list, its own list under its
+**  transform and its opacity. A clipping group marks its box one level
+**  up, draws what is in it at that level, and takes the mark back.
+***********************************************************************/
+static void Draw_List(PUGLNODE *im, const PUGLXFORM *parent, float alpha, GLint level,
+                      float win_w, float win_h)
 {
 	for (; im; im = (PUGLNODE*)im->next) {
-		REBSER *img = (REBSER*)im->image;
-		REBINT  iw, ih;
-		float   x, y, w, h;
+		REBSER   *img = (REBSER*)im->image;
+		PUGLXFORM m;
+		float     a;
+		REBINT    iw, ih;
 
 		if (!im->visible) continue;
+		Pugl_Node_Xform(im, &m);
+		Pugl_Xform_Mul(&m, parent, &m);
+		a = alpha * (float)im->opacity;
+
 		if (im->group) {
-			REBINT gx = ox + im->x, gy = oy + im->y;
-			CLIP   inner = *clip;
-			if (im->w > 0) {
-				if (gx > inner.x0)         inner.x0 = gx;
-				if (gx + im->w < inner.x1) inner.x1 = gx + im->w;
+			REBOOL clips = (im->w > 0 || im->h > 0) && level < 255;
+			if (!clips) {
+				Draw_List((PUGLNODE*)im->children, &m, a, level, win_w, win_h);
+				continue;
 			}
-			if (im->h > 0) {
-				if (gy > inner.y0)         inner.y0 = gy;
-				if (gy + im->h < inner.y1) inner.y1 = gy + im->h;
-			}
-			if (inner.x0 >= inner.x1 || inner.y0 >= inner.y1) continue; // all clipped away
-			if (im->w > 0 || im->h > 0) Set_Scissor(&inner);
-			Draw_List((PUGLNODE*)im->children, gx, gy, &inner);
-			if (im->w > 0 || im->h > 0) Set_Scissor(clip);
+			Stencil_Box(im, &m, level, +1, win_w, win_h);
+			glStencilFunc(GL_EQUAL, level + 1, 0xFF);
+			Draw_List((PUGLNODE*)im->children, &m, a, level + 1, win_w, win_h);
+			Stencil_Box(im, &m, level + 1, -1, win_w, win_h);
+			glStencilFunc(GL_EQUAL, level, 0xFF);
 			continue;
 		}
+
 		if (!img) continue;
 		iw = (REBINT)IMG_WIDE(img);
 		ih = (REBINT)IMG_HIGH(img);
 		if (iw <= 0 || ih <= 0) continue;
 
 		Upload(im, img, iw, ih);
+		if (a <= 0.0f) continue;   // uploaded all the same, for when it shows
 
-		x = (float)(ox + im->x);
-		y = (float)(oy + im->y);
-		w = (float)(im->w > 0 ? im->w : iw);
-		h = (float)(im->h > 0 ? im->h : ih);
-
-		glBegin(GL_QUADS);
-		glTexCoord2f(0.0f, 0.0f); glVertex2f(x,     y);
-		glTexCoord2f(1.0f, 0.0f); glVertex2f(x + w, y);
-		glTexCoord2f(1.0f, 1.0f); glVertex2f(x + w, y + h);
-		glTexCoord2f(0.0f, 1.0f); glVertex2f(x,     y + h);
-		glEnd();
+		Load_Xform(&m);
+		glColor4f(1.0f, 1.0f, 1.0f, a);   // modulates the texture's own alpha
+		Quad((float)(im->w > 0 ? im->w : iw), (float)(im->h > 0 ? im->h : ih));
 	}
 }
 
@@ -149,10 +203,10 @@ static void Draw_List(PUGLNODE *im, REBINT ox, REBINT oy, const CLIP *clip)
 **
 **  The window is cleared to black, and its images are drawn in the
 **  order they were added - those of a group where the group is, and
-**  inside its size when it has one - each
-**  at its offset and its size - scaled
-**  with nearest neighbour, so a pixel stays a pixel - blended by their
-**  alpha. One unit is one device pixel, origin at the top left.
+**  inside its size when it has one - each at its offset and its size,
+**  turned, scaled and faded as set. Scaled with nearest neighbour, so a
+**  pixel stays a pixel, and blended by their alpha. One unit is one
+**  device pixel, origin at the top left.
 **
 **  Textures are not deleted when the window closes: they belong to its
 **  GL context, which takes them with it. Those of images removed while
@@ -162,11 +216,11 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 {
 	PuglArea area = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
 	REBCNT   n;
-	CLIP     all;
 
 	glViewport(0, 0, area.width, area.height);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT);
+	glClearStencil(0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 	for (n = 0; n < pv->dead_count; n++) {
 		GLuint tex = (GLuint)pv->dead[n];
@@ -180,24 +234,21 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 	glLoadIdentity();
 	glOrtho(0, area.width, area.height, 0, -1, 1);
 	glMatrixMode(GL_MODELVIEW);
-	glLoadIdentity();
 
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
-	// The whole window, to start with.
-	all.x0 = all.y0 = 0;
-	all.x1 = (REBINT)area.width;
-	all.y1 = (REBINT)area.height;
-	Window_High = all.y1;
-	glEnable(GL_SCISSOR_TEST);
-	Set_Scissor(&all);
+	// Level 0 is the whole window, until a clipping group says otherwise.
+	glEnable(GL_STENCIL_TEST);
+	glStencilFunc(GL_EQUAL, 0, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 
-	Draw_List((PUGLNODE*)pv->images, 0, 0, &all);
+	Draw_List((PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, 0,
+	          (float)area.width, (float)area.height);
 
-	glDisable(GL_SCISSOR_TEST);
+	glDisable(GL_STENCIL_TEST);
 	glDisable(GL_BLEND);
 	glDisable(GL_TEXTURE_2D);
+	glLoadIdentity();
 }

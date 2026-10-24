@@ -29,6 +29,10 @@ REBOL [
 		to like to a window: their offsets are relative to it, and it moves,
 		hides and is entered and left as a whole. With a size, it clips what
 		is in it - a viewport, scrolled by moving what is inside.
+
+		Images and groups can be turned, scaled and faded - `rotation`,
+		`scale`, `pivot`, `opacity` - and a group does it to all in it. The
+		pointer finds them where they are drawn, clipping included.
 	}
 ]
 
@@ -96,6 +100,14 @@ typedef struct Pugl_Node_Context {
 	                 // group the size it clips to; 0 for not clipped
 	REBCNT  visible;
 	REBCNT  track;   // `track?`: enter and leave are reported for it
+
+	// The transform: moved to offset, then around the pivot turned by
+	// `rot` degrees (clockwise - y points down) and scaled. A group's
+	// applies to everything in it, and so does its opacity, multiplied.
+	double  rot;
+	double  sx, sy;
+	double  px, py;
+	double  opacity; // 0.0 - 1.0
 	REBCNT  texture;      // GL texture name, 0 before the first draw
 	REBINT  tex_w, tex_h; // the size it was made with
 	REBCNT  dirty;        // the pixels must be uploaded again
@@ -129,6 +141,10 @@ handles: [
 		hover?   logic!    none      "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
 		window   handle!   none      "The window it is shown in; none once removed"
 		parent   handle!   none      "The group it is in; none at the window's top level"
+		rotation decimal!  [decimal! integer!] "Degrees it is turned around its pivot, clockwise (default 0.0)"
+		scale    [decimal! pair!] [decimal! integer! pair!] "Scale around its pivot - one for both axes, or a pair for each (default 1.0); a pair! only while the two differ"
+		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its top-left (default 0x0)"
+		opacity  percent!  [percent! decimal! integer!] "How opaque it is, 0% to 100% (default 100%); still there for the pointer at 0%"
 	]
 	group: [
 		"Pugl group handle - images and groups moved, hidden and hovered together"
@@ -141,6 +157,10 @@ handles: [
 		images   block!    none      "Images and groups added to it, in drawing order"
 		window   handle!   none      "The window it is shown in; none once removed"
 		parent   handle!   none      "The group it is in; none at the window's top level"
+		rotation decimal!  [decimal! integer!] "Degrees it - and all in it - is turned around its pivot, clockwise (default 0.0)"
+		scale    [decimal! pair!] [decimal! integer! pair!] "Scale around its pivot, of all in it - one for both axes, or a pair for each (default 1.0)"
+		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its origin (default 0x0)"
+		opacity  percent!  [percent! decimal! integer!] "How opaque all in it is, 0% to 100% (default 100%), multiplied with their own"
 	]
 ]
 

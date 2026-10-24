@@ -167,6 +167,40 @@ paint: function [
 pic:   make image! 256x256  paint pic 0
 small: make image! 64x64    paint small 255
 
+;; A point of a node's own units in its parent's - its transform: moved to
+;; its offset, turned clockwise and scaled around its pivot. What the
+;; extension does, so that the test can check it.
+from-local: function [node point [pair!]][
+	scale: node/scale
+	if number? scale [scale: as-pair scale scale]
+	d: (point - node/pivot) * scale
+	c: cosine node/rotation  s: sine node/rotation
+	node/offset + node/pivot + as-pair (c * d/x - (s * d/y)) (s * d/x + (c * d/y))
+]
+;; ... and back: a point of its parent's in its own units; none when it is
+;; scaled to nothing.
+to-local: function [node point [pair!]][
+	scale: node/scale
+	if number? scale [scale: as-pair scale scale]
+	if any [scale/x = 0  scale/y = 0][return none]
+	d: point - node/offset - node/pivot
+	c: cosine node/rotation  s: sine node/rotation
+	node/pivot + as-pair (c * d/x + (s * d/y)) / scale/x  (c * d/y - (s * d/x)) / scale/y
+]
+;; The box a box of a node's own units takes in its parent's: the box
+;; around its four corners, as turned.
+box-through: function [node box [block!]][
+	lo: hi: none
+	foreach corner reduce [
+		box/1  box/2  as-pair box/1/x box/2/y  as-pair box/2/x box/1/y
+	][
+		corner: from-local node corner
+		lo: either lo [min lo corner][corner]
+		hi: either hi [max hi corner][corner]
+	]
+	reduce [lo hi]
+]
+
 bounds-of: function [
 	"The box a list's content takes, from the list's origin - [top-left bottom-right], or none"
 	list [block!]
@@ -179,11 +213,9 @@ bounds-of: function [
 			;; A clipping group takes its own size, whatever is in it.
 			clip: node/size
 			if all [clip/x > 0  clip/y > 0][inner: reduce [0x0 clip]]
-			if inner [
-				reduce [inner/1 + node/offset  inner/2 + node/offset]
-			]
+			if inner [box-through node inner]
 		][
-			reduce [node/offset  node/offset + node/size]
+			box-through node reduce [0x0 node/size]
 		]
 		if part [
 			box: either box [reduce [min box/1 part/1  max box/2 part/2]][part]
@@ -370,6 +402,7 @@ print ["remove a group:  " remove-image tmp "(expected true)"]
 print ["group removed:   " tmp "(expected 0#... removed)"]
 print ["its image too:   " tmp-img "(expected 0#... removed)"]
 print ["images after:    " mold tmp/images "(expected none)"]
+print ["rotation after:  " mold tmp/rotation "(expected none)"]
 print ["add to removed:  " error? try [add-image tmp dot 0x0]]
 print ["left in group:   " length? grp/images "(expected 3)"]
 center-content
@@ -425,6 +458,75 @@ viewport/size: 64x64
 scroll/offset: -96x-96   ;; the middle of the big image
 
 ;;=============================================================================
+print as-yellow "^/== Transformations"
+;;=============================================================================
+
+;; Images and groups turn and scale around their pivot - their top-left,
+;; 0x0, unless it is set - and fade; a group does it to all in it. `size`
+;; stays what it was: the box before it is turned and scaled.
+print ["rotation:        " img2/rotation "(expected 0.0)"]
+print ["scale:           " img2/scale "(expected 1.0)"]
+print ["pivot:           " img2/pivot "(expected 0x0)"]
+print ["opacity:         " img2/opacity "(expected 100%)"]
+print ["of a group:      " grp/rotation grp/scale grp/pivot grp/opacity "(expected 0.0 1.0 0x0 100%)"]
+img2/rotation: 90
+print ["an integer:      " mold img2/rotation "(expected 90.0)"]
+img2/rotation: 0
+img2/scale: 2
+print ["scale 2:         " mold img2/scale "(expected 2.0)"]
+print ["size unchanged:  " img2/size "(expected 128x128)"]
+img2/scale: 2x1
+print ["scale 2x1:       " img2/scale "(expected 2x1)"]
+img2/scale: 1x1
+print ["the same again:  " mold img2/scale "(expected 1.0 - a decimal! while both are the same)"]
+img2/opacity: 50%
+print ["opacity 50%:     " img2/opacity "(expected 50%)"]
+img2/opacity: 0.25
+print ["a decimal:       " img2/opacity "(expected 25%)"]
+img2/opacity: 100%
+print ["too much:        " error? try [img2/opacity: 150%]]
+print ["below zero:      " error? try [img2/opacity: -0.1]]
+print ["a bad rotation:  " error? try [img2/rotation: "x"]]
+print ["a bad scale:     " error? try [img2/scale: "x"]]
+print ["a bad pivot:     " error? try [img2/pivot: 1.0]]
+
+;; The test's own sums agree with the extension's: a point taken into a
+;; node's units and back is where it was.
+img2/pivot: 64x64  img2/rotation: 30  img2/scale: 1.5
+there: from-local img2 to-local img2 310x50
+print ["there and back:  " 1 > ((abs there/x - 310) + (abs there/y - 50)) "(expected true)"]
+img2/pivot: 0x0  img2/rotation: 0  img2/scale: 1
+
+;; WATCH: the scaled small one spins once around its middle, grows and
+;; shrinks back, and turns upside down by being mirrored.
+img2/pivot: img2/size / 2
+repeat i 36 [img2/rotation: i * 10  wait 0.02]
+repeat i 10 [img2/scale: 1 + (i / 20)  wait 0.02]
+repeat i 10 [img2/scale: 1.5 - (i / 20)  wait 0.02]
+img2/scale: 1x-1  wait 0.3
+img2/scale: 1
+print ["full turn:       " img2/rotation "(expected 360.0)"]
+
+;; WATCH: the white squares fade out and back in - all three, as a group.
+repeat i 10 [grp/opacity: 1 - (i / 10)  wait 0.02]
+print ["faded out:       " grp/opacity "(expected 0%)"]
+repeat i 10 [grp/opacity: i / 10  wait 0.02]
+
+;; WATCH: the viewport turns a quarter around its middle - the big image
+;; stays clipped to the turned square, and so does the corner square in
+;; it, inside both clips.
+viewport/pivot: viewport/size / 2
+repeat i 18 [viewport/rotation: i * 5  wait 0.02]
+wait 0.3
+
+;; Left like this for the events: the scaled small one tilted, the
+;; viewport turned by a third of a right angle.
+img2/rotation: 20
+viewport/rotation: 30
+center-content
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+
+;;=============================================================================
 print as-yellow "^/== An icon"
 ;;=============================================================================
 
@@ -478,7 +580,8 @@ and the top-left square report `enter` and `leave` themselves (as the event
 source); the window reports its own when the pointer crosses its edge.
 Moving between the squares of the group does not leave the group.
 The viewport and the big image in it are tracked too: over its clipped
-away part there is nothing to enter.
+away part there is nothing to enter. The scaled small image and the
+viewport are turned - they are entered and left by their turned shape.
 Resize the window by dragging its edge - the images are not stretched, and
 are moved back to the middle as soon as the resize is reported (on Windows
 when the drag ends: its modal resize loop does not let the script run).
@@ -512,22 +615,25 @@ chain-of: function [node][
 	while [node][append chain node  node: node/parent]
 	chain
 ]
-;; Where in the window a node's offset is measured from.
-origin-of: function [node][
-	origin: 0x0
-	while [node: node/parent][origin: origin + node/offset]
-	origin
+;; A point of the window in a node's own units - through every group it is
+;; in, outermost first.
+local-of: function [node point [pair!]][
+	foreach n reverse chain-of node [
+		unless point: to-local n point [return none]
+	]
+	point
 ]
 
 ;; The topmost image under a point, or none - the last one added is on top,
-;; and a group's images are where the group is, relative to it.
+;; and each takes the point back through its transform, so a turned image
+;; is hit by its real shape.
 image-at: function [point [pair!]][top-at window/images point]
 top-at: function [list [block!] point [pair!]][
 	hit: none
 	foreach node list [
 		unless node/visible? [continue]
+		unless inside: to-local node point [continue]
 		either node/type = 'pugl-group [
-			inside: point - node/offset
 			clip: node/size
 			;; What a group clips away is not there to be hit.
 			unless any [
@@ -538,9 +644,8 @@ top-at: function [list [block!] point [pair!]][
 			]
 		][
 			if all [
-				point/x >= node/offset/x  point/y >= node/offset/y
-				point/x <  (node/offset/x + node/size/x)
-				point/y <  (node/offset/y + node/size/y)
+				inside/x >= 0  inside/y >= 0
+				inside/x < node/size/x  inside/y < node/size/y
 			][hit: node]
 		]
 	]
@@ -641,7 +746,7 @@ report: func [event /local type position d hit src][
 	if type = 'down [
 		either hit: image-at position [
 			print ["  on" hit "at pixel"
-				(position - (origin-of hit) - hit/offset) * hit/image/size / hit/size]
+				(local-of hit position) * hit/image/size / hit/size]
 			paint hit/image random 256
 			redraw hit
 		][

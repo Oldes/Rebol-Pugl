@@ -384,30 +384,39 @@ static void Append_Event_Of(REBSER *blk, REBCNT *at, REBHOB *source,
 
 /***********************************************************************
 **  The topmost visible image under a point of a list, or NULL - the
-**  point relative to the list's origin. In drawing order, so the last
+**  point in the units of the list's owner (the window, or a group).
+**
+**  Each node takes the point back through its own transform, into its
+**  own units, where its box is simply 0,0 to its size - so a turned or
+**  scaled image is hit by its real shape. In drawing order, so the last
 **  match is the one on top; a group is searched where it is in the list,
-**  and only while it is visible. The right and bottom edges are outside,
-**  so images laid edge to edge never both claim a point.
+**  only while it is visible, and only inside its size when it clips. The
+**  right and bottom edges are outside, so images laid edge to edge never
+**  both claim a point. Opacity does not matter: a faded image is there.
 ***********************************************************************/
-static PUGLNODE *Image_At(PUGLNODE *list, REBINT x, REBINT y)
+static PUGLNODE *Image_At(PUGLNODE *list, double x, double y)
 {
 	PUGLNODE *n, *hit, *top = NULL;
 	for (n = list; n; n = (PUGLNODE*)n->next) {
-		REBINT w, h;
+		PUGLXFORM m;
+		double    lx = x, ly = y, w, h;
+
 		if (!n->visible) continue;
+		Pugl_Node_Xform(n, &m);
+		if (!Pugl_Xform_Undo(&m, &lx, &ly)) continue;   // scaled to nothing
+
 		if (n->group) {
-			REBINT gx = x - n->x, gy = y - n->y;
 			// What a group clips away is not there to be hit either.
-			if (n->w > 0 && (gx < 0 || gx >= n->w)) continue;
-			if (n->h > 0 && (gy < 0 || gy >= n->h)) continue;
-			hit = Image_At((PUGLNODE*)n->children, gx, gy);
+			if (n->w > 0 && (lx < 0 || lx >= n->w)) continue;
+			if (n->h > 0 && (ly < 0 || ly >= n->h)) continue;
+			hit = Image_At((PUGLNODE*)n->children, lx, ly);
 			if (hit) top = hit;
 			continue;
 		}
 		if (!n->image) continue;
-		w = n->w > 0 ? n->w : (REBINT)IMG_WIDE((REBSER*)n->image);
-		h = n->h > 0 ? n->h : (REBINT)IMG_HIGH((REBSER*)n->image);
-		if (x >= n->x && y >= n->y && x < n->x + w && y < n->y + h) top = n;
+		w = n->w > 0 ? n->w : (double)IMG_WIDE((REBSER*)n->image);
+		h = n->h > 0 ? n->h : (double)IMG_HIGH((REBSER*)n->image);
+		if (lx >= 0 && ly >= 0 && lx < w && ly < h) top = n;
 	}
 	return top;
 }
@@ -445,7 +454,7 @@ static void Enter_Chain(REBSER *blk, REBCNT *at, PUGLNODE *n, PUGLNODE *was,
 static void Hover_To(REBSER *blk, REBCNT *at, PUGLWIN *win,
                      REBINT x, REBINT y, REBOOL inside)
 {
-	PUGLNODE *now = inside ? Image_At((PUGLNODE*)win->images, x, y) : NULL;
+	PUGLNODE *now = inside ? Image_At((PUGLNODE*)win->images, (double)x, (double)y) : NULL;
 	PUGLNODE *was = (PUGLNODE*)win->hover;
 	PUGLNODE *n;
 
@@ -732,6 +741,9 @@ static void Link_Node(PUGLWIN *win, PUGLNODE *parent, PUGLNODE *n)
 	n->win     = win;
 	n->parent  = parent;
 	n->visible = TRUE;
+	n->sx      = 1.0;   // not turned, not scaled, opaque
+	n->sy      = 1.0;
+	n->opacity = 1.0;
 	for (link = Node_List(win, parent); *link; link = (PUGLNODE**)&(*link)->next);
 	*link = n;
 	n->hob->flags |= HANDLE_CONTEXT_LOCKED;
@@ -1034,7 +1046,11 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	case W_PUGL_ARG_TRACKQ:
 	case W_PUGL_ARG_HOVERQ:
 	case W_PUGL_ARG_WINDOW:
-	case W_PUGL_ARG_PARENT:  return TRUE;
+	case W_PUGL_ARG_PARENT:
+	case W_PUGL_ARG_ROTATION:
+	case W_PUGL_ARG_SCALE:
+	case W_PUGL_ARG_PIVOT:
+	case W_PUGL_ARG_OPACITY: return TRUE;
 	}
 	return FALSE;
 }
@@ -1134,6 +1150,35 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = Nodes_Block((PUGLNODE*)im->children, arg) ? RXT_BLOCK : RXT_NONE;
 		break;
 
+	case W_PUGL_ARG_ROTATION:
+		arg->dec64 = im->rot;
+		*type = RXT_DECIMAL;
+		break;
+
+	// One number while both axes are the same, which is how it is usually
+	// set - a pair! only once they differ.
+	case W_PUGL_ARG_SCALE:
+		if (im->sx == im->sy) {
+			arg->dec64 = im->sx;
+			*type = RXT_DECIMAL;
+		} else {
+			arg->pair.x = (float)im->sx;
+			arg->pair.y = (float)im->sy;
+			*type = RXT_PAIR;
+		}
+		break;
+
+	case W_PUGL_ARG_PIVOT:
+		arg->pair.x = (float)im->px;
+		arg->pair.y = (float)im->py;
+		*type = RXT_PAIR;
+		break;
+
+	case W_PUGL_ARG_OPACITY:
+		arg->dec64 = im->opacity;
+		*type = RXT_PERCENT;
+		break;
+
 	default:
 		return PE_BAD_SELECT;
 	}
@@ -1182,6 +1227,43 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (*type != RXT_LOGIC) return PE_BAD_SET_TYPE;
 		im->visible = arg->int32a ? TRUE : FALSE;
 		break;
+
+	case W_PUGL_ARG_ROTATION:
+		if      (*type == RXT_DECIMAL) im->rot = arg->dec64;
+		else if (*type == RXT_INTEGER) im->rot = (double)arg->int64;
+		else return PE_BAD_SET_TYPE;
+		break;
+
+	// A number for both axes, or a pair for each. Negative mirrors it;
+	// zero makes it nothing - not drawn, and nothing for the pointer.
+	case W_PUGL_ARG_SCALE:
+		if (*type == RXT_DECIMAL) {
+			im->sx = im->sy = arg->dec64;
+		} else if (*type == RXT_INTEGER) {
+			im->sx = im->sy = (double)arg->int64;
+		} else if (*type == RXT_PAIR) {
+			im->sx = arg->pair.x;
+			im->sy = arg->pair.y;
+		} else return PE_BAD_SET_TYPE;
+		break;
+
+	case W_PUGL_ARG_PIVOT:
+		if (*type != RXT_PAIR) return PE_BAD_SET_TYPE;
+		im->px = arg->pair.x;
+		im->py = arg->pair.y;
+		break;
+
+	// A percent! is a decimal! underneath, so both arrive the same way. An
+	// integer is there for 0 and 1, which is what sums like `1 - (i / 10)`
+	// end at.
+	case W_PUGL_ARG_OPACITY: {
+		double o;
+		if      (*type == RXT_PERCENT || *type == RXT_DECIMAL) o = arg->dec64;
+		else if (*type == RXT_INTEGER) o = (double)arg->int64;
+		else return PE_BAD_SET_TYPE;
+		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
+		im->opacity = o;
+		break; }
 
 	// Only a flag: hover is kept either way, so turning it on while the
 	// pointer is already over the image reports nothing until it leaves.
