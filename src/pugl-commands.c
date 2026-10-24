@@ -1200,26 +1200,42 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 
 int PuglImage_mold(REBHOB *hob, REBSER *str)
 {
-	int      len;
+	int       len;
+	char      text[96];
 	PUGLNODE *im;
 
 	if (!str || !hob || !(im = (PUGLNODE*)hob->data)) return 0;
 
-	SERIES_TAIL(str) = 0;
+	// The pointer part first, like a window's - an image or a group has no
+	// native object, so it is the context's, which lives as long as the
+	// handle does: it stays once removed, and tells two handles apart.
+	//
+	// Formatted whole, then appended ONCE: the core takes the returned
+	// `len` as the length of the mold, and APPEND_STRING sets it to what
+	// its own call appended - nor is that macro a single statement.
 	if (im->win && im->group) {
 		REBCNT    count = 0;
 		PUGLNODE *c;
 		for (c = (PUGLNODE*)im->children; c; c = (PUGLNODE*)c->next) count++;
-		APPEND_STRING(str, "%u at %dx%d", (unsigned)count, (int)im->x, (int)im->y);
-		if (im->w > 0 || im->h > 0)
-			APPEND_STRING(str, " clip %dx%d", (int)im->w, (int)im->h);
+		if (im->w > 0 || im->h > 0) {
+			snprintf(text, sizeof(text), "0#%lx %u at %dx%d clip %dx%d",
+				(unsigned long)(REBUPT)im, (unsigned)count,
+				(int)im->x, (int)im->y, (int)im->w, (int)im->h);
+		} else {
+			snprintf(text, sizeof(text), "0#%lx %u at %dx%d",
+				(unsigned long)(REBUPT)im, (unsigned)count, (int)im->x, (int)im->y);
+		}
 	} else if (im->win && im->image) {
-		APPEND_STRING(str, "%dx%d at %dx%d",
+		snprintf(text, sizeof(text), "0#%lx %dx%d at %dx%d",
+			(unsigned long)(REBUPT)im,
 			(int)(im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image)),
 			(int)(im->h > 0 ? im->h : (REBINT)IMG_HIGH((REBSER*)im->image)),
 			(int)im->x, (int)im->y);
 	} else {
-		APPEND_STRING(str, "%s", "removed");
+		snprintf(text, sizeof(text), "0#%lx removed", (unsigned long)(REBUPT)im);
 	}
+
+	SERIES_TAIL(str) = 0;
+	APPEND_STRING(str, "%s", text);
 	return len;
 }

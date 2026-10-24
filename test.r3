@@ -74,7 +74,7 @@ print ["redraw refused:  " error? try [redraw spare]]
 print ["images after:    " mold spare/images "(expected none)"]
 print ["add-image refused:" error? try [add-image spare make image! 8x8 0x0]]
 ;; Closing a window removes its images; their handles stay, and say so.
-print ["its image:       " spare-img "(expected removed)"]
+print ["its image:       " spare-img "(expected 0#... removed)"]
 print ["image's window:  " mold spare-img/window "(expected none)"]
 release spare-img
 print ["icon after:      " mold spare/icon "(expected none)"]
@@ -193,7 +193,7 @@ stage: add-group window 0x0
 print ["the stage:       " all [1 = length? window/images  window/images/1 == stage] "(expected true)"]
 print ["nothing to move: " centered? "(expected true - empty)"]
 img1: add-image stage pic 20x20
-print ["image handle:    " img1 "(expected 256x256 at 20x20)"]
+print ["image handle:    " mold img1 "(expected 0#... 256x256 at 20x20)"]
 print ["the handle type: " img1/type]
 print ["the same series: " same? img1/image pic "(expected true)"]
 print ["offset:          " img1/offset "(expected 20x20)"]
@@ -270,11 +270,17 @@ center-content
 wait 0.3
 
 ;; Removed: the handle stays, and answers none for everything.
+;; The pointer part of the mold is the handle's own: two differ, and one
+;; keeps it once removed.
+pointer-of: func [handle][pick split mold handle #" " 3]
+before: pointer-of img3
+print ["pointer part:    " before "(different from img1's:" (before <> pointer-of img1) ")"]
 print ["remove-image:    " remove-image img3 "(expected true)"]
+print ["the same after:  " before = pointer-of img3 "(expected true)"]
 print ["images:          " length? stage/images "(expected 2)"]
 center-content
 print ["centered:        " centered? "(expected true)"]
-print ["removed:         " img3 "(expected removed)"]
+print ["removed:         " img3 "(expected 0#... removed)"]
 print ["offset after:    " mold img3/offset "(expected none)"]
 print ["hover? after:    " mold img3/hover? "(expected none)"]
 print ["removing twice:  " remove-image img3 "(expected true)"]
@@ -290,7 +296,7 @@ print as-yellow "^/== Groups"
 ;; entered and left as a whole. Groups nest.
 dot: make image! [24x24 255.255.255]
 grp: add-group stage 300x200
-print ["group handle:    " grp "(expected 0 at 300x200)"]
+print ["group handle:    " mold grp "(expected 0#... 0 at 300x200)"]
 print ["the handle type: " grp/type]
 print ["offset:          " grp/offset "(expected 300x200)"]
 print ["visible?:        " grp/visible? "(expected true)"]
@@ -308,7 +314,7 @@ inner: add-group grp 0x30
 g3: add-image inner dot 15x0
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
-print ["group molded:    " grp "(expected 3 at 300x200)"]
+print ["group molded:    " mold grp "(expected 0#... 3 at 300x200)"]
 print ["in order:        " all [
 	3 = length? grp/images
 	grp/images/1 == g1  grp/images/2 == g2  grp/images/3 == inner
@@ -345,8 +351,8 @@ tmp: add-group grp 0x60
 tmp-img: add-image tmp dot 0x0
 center-content
 print ["remove a group:  " remove-image tmp "(expected true)"]
-print ["group removed:   " tmp "(expected removed)"]
-print ["its image too:   " tmp-img "(expected removed)"]
+print ["group removed:   " tmp "(expected 0#... removed)"]
+print ["its image too:   " tmp-img "(expected 0#... removed)"]
 print ["images after:    " mold tmp/images "(expected none)"]
 print ["add to removed:  " error? try [add-image tmp dot 0x0]]
 print ["left in group:   " length? grp/images "(expected 3)"]
@@ -365,7 +371,12 @@ print as-yellow "^/== Clipping"
 ;; is in a clipping group in a clipping group is inside both.
 big: make image! 256x256  paint big 128
 viewport: add-group/size stage 360x200 64x64
-print ["viewport:        " viewport "(expected 0 at 360x200 clip 64x64)"]
+print ["viewport:        " mold viewport "(expected 0#... 0 at 360x200 clip 64x64)"]
+;; The whole of it - the mold is built in parts, and once came out cut
+;; after the pointer part.
+print ["mold ends:       " did find/tail mold viewport "0 at 360x200 clip 64x64)" "(expected true)"]
+print ["unclipped:       " none? find mold grp "clip" "(expected true)"]
+print ["image mold ends: " did find/tail mold img1 "256x256 at 20x20)" "(expected true)"]
 print ["size:            " viewport/size "(expected 64x64)"]
 scroll: add-image viewport big 0x0
 print ["image's size:    " scroll/size "(expected 256x256 - not clipped itself)"]
@@ -385,7 +396,7 @@ print ["scrolled:        " scroll/offset "(expected -192x-192)"]
 ;; WATCH: the whole big image, over the other ones - then cut back.
 viewport/size: 0x0
 center-content
-print ["not clipped:     " viewport "(expected 2 at 360x200)"]
+print ["not clipped:     " mold viewport "(expected 0#... 2 at 360x200)"]
 wait 0.5
 viewport/size: 64x64
 center-content
@@ -640,7 +651,7 @@ do-events window :report
 print ["^/window closed - open?:" window/open? "(expected false)"]
 print ["molded:" window "(expected closed)"]
 print ["images after close:" mold window/images "(expected none)"]
-print ["img1 after close:" img1 "(expected removed)"]
+print ["img1 after close:" img1 "(expected 0#... removed)"]
 print ["the image survives:" type? pic pic/size]
 release window
 print ["released:" window]
