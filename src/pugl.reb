@@ -27,7 +27,8 @@ REBOL [
 
 		`add-group` makes a group, which images and other groups are added
 		to like to a window: their offsets are relative to it, and it moves,
-		hides and is entered and left as a whole.
+		hides and is entered and left as a whole. With a size, it clips what
+		is in it - a viewport, scrolled by moving what is inside.
 	}
 ]
 
@@ -91,7 +92,8 @@ typedef struct Pugl_Node_Context {
 	REBCNT  group;   // a group, not an image
 	void   *image;   // the image! series; NULL once removed, and for groups
 	REBINT  x, y;    // offset in the window, or in the group it is in
-	REBINT  w, h;    // size it is drawn at; 0 for the image's own
+	REBINT  w, h;    // size it is drawn at; 0 for the image's own - for a
+	                 // group the size it clips to; 0 for not clipped
 	REBCNT  visible;
 	REBCNT  track;   // `track?`: enter and leave are reported for it
 	REBCNT  texture;      // GL texture name, 0 before the first draw
@@ -132,6 +134,7 @@ handles: [
 		"Pugl group handle - images and groups moved, hidden and hovered together"
 		;NAME    GET       SET       DESCRIPTION
 		offset   pair!     pair!     "Position of its origin in the window - or in its group; what is in it is placed relative to it"
+		size     pair!     pair!     "Size of the box from its origin which what is in it is clipped to - drawn and hit only inside; a zero axis is not clipped (default 0x0)"
 		visible? logic!    logic!    "Whether what is in it is drawn"
 		track?   logic!    logic!    "Whether `enter` and `leave` are reported for it as a whole, with the group as the source; off by default"
 		hover?   logic!    none      "Whether the pointer is over one of its images, as of the last `poll-events`"
@@ -175,6 +178,7 @@ commands: [
 		"Makes a group in a window or a group and returns its handle"
 		target [handle!] "A window, or a group"
 		offset [pair!]   "Position of its origin - what is added to it is placed relative to it"
+		/size sz [pair!] "Clips what is in it to this size (default: not clipped)"
 	]
 ]
 

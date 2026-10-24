@@ -89,6 +89,8 @@ Takes an image out of its window - or a group, with all that is in it
 Makes a group in a window or a group and returns its handle
 * `target` `[handle!]` A window, or a group
 * `offset` `[pair!]` Position of its origin - what is added to it is placed relative to it
+* `/size`
+* `sz` `[pair!]` Clips what is in it to this size (default: not clipped)
 
 
 ## Used handles and its getters / setters
@@ -127,6 +129,7 @@ Makes a group in a window or a group and returns its handle
 ```rebol
 ;Refinement       Gets                Sets                          Description
 /offset           pair!               pair!                         "Position of its origin in the window - or in its group; what is in it is placed relative to it"
+/size             pair!               pair!                         "Size of the box from its origin which what is in it is clipped to - drawn and hit only inside; a zero axis is not clipped (default 0x0)"
 /visible?         logic!              logic!                        "Whether what is in it is drawn"
 /track?           logic!              logic!                        "Whether `enter` and `leave` are reported for it as a whole, with the group as the source; off by default"
 /hover?           logic!              none                          "Whether the pointer is over one of its images, as of the last `poll-events`"

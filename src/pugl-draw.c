@@ -79,10 +79,25 @@ static void Upload(PUGLNODE *im, REBSER *img, REBINT w, REBINT h)
 }
 
 /***********************************************************************
-**  A list of images, its origin at ox,oy - a group is drawn where it is
-**  in the list, its own images in their order, relative to it.
+**  The box drawing is clipped to, in window pixels from the top left -
+**  x0,y0 inside, x1,y1 just outside.
 ***********************************************************************/
-static void Draw_List(PUGLNODE *im, float ox, float oy)
+typedef struct { REBINT x0, y0, x1, y1; } CLIP;
+
+static REBINT Window_High;   // for the scissor box, which GL has bottom-up
+
+static void Set_Scissor(const CLIP *c)
+{
+	glScissor(c->x0, Window_High - c->y1, c->x1 - c->x0, c->y1 - c->y0);
+}
+
+/***********************************************************************
+**  A list of images, its origin at ox,oy - a group is drawn where it is
+**  in the list, its own images in their order, relative to it. A group
+**  with a size narrows the clip box for what is in it - the scissor is
+**  set for it, and back once it is drawn.
+***********************************************************************/
+static void Draw_List(PUGLNODE *im, REBINT ox, REBINT oy, const CLIP *clip)
 {
 	for (; im; im = (PUGLNODE*)im->next) {
 		REBSER *img = (REBSER*)im->image;
@@ -91,7 +106,20 @@ static void Draw_List(PUGLNODE *im, float ox, float oy)
 
 		if (!im->visible) continue;
 		if (im->group) {
-			Draw_List((PUGLNODE*)im->children, ox + (float)im->x, oy + (float)im->y);
+			REBINT gx = ox + im->x, gy = oy + im->y;
+			CLIP   inner = *clip;
+			if (im->w > 0) {
+				if (gx > inner.x0)         inner.x0 = gx;
+				if (gx + im->w < inner.x1) inner.x1 = gx + im->w;
+			}
+			if (im->h > 0) {
+				if (gy > inner.y0)         inner.y0 = gy;
+				if (gy + im->h < inner.y1) inner.y1 = gy + im->h;
+			}
+			if (inner.x0 >= inner.x1 || inner.y0 >= inner.y1) continue; // all clipped away
+			if (im->w > 0 || im->h > 0) Set_Scissor(&inner);
+			Draw_List((PUGLNODE*)im->children, gx, gy, &inner);
+			if (im->w > 0 || im->h > 0) Set_Scissor(clip);
 			continue;
 		}
 		if (!img) continue;
@@ -101,8 +129,8 @@ static void Draw_List(PUGLNODE *im, float ox, float oy)
 
 		Upload(im, img, iw, ih);
 
-		x = ox + (float)im->x;
-		y = oy + (float)im->y;
+		x = (float)(ox + im->x);
+		y = (float)(oy + im->y);
 		w = (float)(im->w > 0 ? im->w : iw);
 		h = (float)(im->h > 0 ? im->h : ih);
 
@@ -120,7 +148,8 @@ static void Draw_List(PUGLNODE *im, float ox, float oy)
 **  and the buffers are swapped by the backend after it returns.
 **
 **  The window is cleared to black, and its images are drawn in the
-**  order they were added - those of a group where the group is - each
+**  order they were added - those of a group where the group is, and
+**  inside its size when it has one - each
 **  at its offset and its size - scaled
 **  with nearest neighbour, so a pixel stays a pixel - blended by their
 **  alpha. One unit is one device pixel, origin at the top left.
@@ -133,6 +162,7 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 {
 	PuglArea area = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
 	REBCNT   n;
+	CLIP     all;
 
 	glViewport(0, 0, area.width, area.height);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -157,8 +187,17 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
-	Draw_List((PUGLNODE*)pv->images, 0.0f, 0.0f);
+	// The whole window, to start with.
+	all.x0 = all.y0 = 0;
+	all.x1 = (REBINT)area.width;
+	all.y1 = (REBINT)area.height;
+	Window_High = all.y1;
+	glEnable(GL_SCISSOR_TEST);
+	Set_Scissor(&all);
 
+	Draw_List((PUGLNODE*)pv->images, 0, 0, &all);
+
+	glDisable(GL_SCISSOR_TEST);
 	glDisable(GL_BLEND);
 	glDisable(GL_TEXTURE_2D);
 }

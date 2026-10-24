@@ -396,7 +396,11 @@ static PUGLNODE *Image_At(PUGLNODE *list, REBINT x, REBINT y)
 		REBINT w, h;
 		if (!n->visible) continue;
 		if (n->group) {
-			hit = Image_At((PUGLNODE*)n->children, x - n->x, y - n->y);
+			REBINT gx = x - n->x, gy = y - n->y;
+			// What a group clips away is not there to be hit either.
+			if (n->w > 0 && (gx < 0 || gx >= n->w)) continue;
+			if (n->h > 0 && (gy < 0 || gy >= n->h)) continue;
+			hit = Image_At((PUGLNODE*)n->children, gx, gy);
 			if (hit) top = hit;
 			continue;
 		}
@@ -803,12 +807,13 @@ COMMAND cmd_pugl_remove_image(RXIFRM *frm, void *ctx)
 
 
 /***********************************************************************
-**  add-group target [handle!] offset [pair!]
+**  add-group target [handle!] offset [pair!] /size sz
 **
-**  Frame: 1 target, 2 offset
+**  Frame: 1 target, 2 offset, 3 /size, 4 sz
 **
 **  An empty group, at the end of the window's or the group's list. What
-**  is added to it later is drawn where the group is in that list.
+**  is added to it later is drawn where the group is in that list - and,
+**  with a size, only inside it.
 ***********************************************************************/
 COMMAND cmd_pugl_add_group(RXIFRM *frm, void *ctx)
 {
@@ -816,8 +821,14 @@ COMMAND cmd_pugl_add_group(RXIFRM *frm, void *ctx)
 	PUGLWIN  *win = Frm_Target(frm, 1, &parent);
 	REBHOB   *hob;
 	PUGLNODE *grp;
+	REBINT    w = 0, h = 0;
 
 	if (!win) RETURN_ERROR(ERR_INVALID_TARGET);
+	if (RXA_REF(frm, 3)) {
+		w = (REBINT)RXA_PAIR(frm, 4).x;
+		h = (REBINT)RXA_PAIR(frm, 4).y;
+		if (w < 0 || h < 0 || w > 10000 || h > 10000) RETURN_ERROR(ERR_BAD_SIZE);
+	}
 
 	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglGroup);
 	if (!hob) RETURN_ERROR(ERR_NO_HANDLE);
@@ -827,6 +838,8 @@ COMMAND cmd_pugl_add_group(RXIFRM *frm, void *ctx)
 	grp->group = TRUE;
 	grp->x     = (REBINT)RXA_PAIR(frm, 2).x;
 	grp->y     = (REBINT)RXA_PAIR(frm, 2).y;
+	grp->w     = w;
+	grp->h     = h;
 	Link_Node(win, parent, grp);
 	// Nothing to draw yet - only what is added to it is.
 
@@ -1013,9 +1026,9 @@ int PuglWindow_mold(REBHOB *hob, REBSER *str)
 static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 {
 	switch (word) {
-	case W_PUGL_ARG_IMAGE:
-	case W_PUGL_ARG_SIZE:    return !n->group;
+	case W_PUGL_ARG_IMAGE:   return !n->group;
 	case W_PUGL_ARG_IMAGES:  return n->group ? TRUE : FALSE;
+	case W_PUGL_ARG_SIZE:
 	case W_PUGL_ARG_OFFSET:
 	case W_PUGL_ARG_VISIBLEQ:
 	case W_PUGL_ARG_TRACKQ:
@@ -1076,8 +1089,15 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_PAIR;
 		break;
 
-	// What it is drawn at, a zero axis resolved to the image's own.
+	// What it is drawn at, a zero axis resolved to the image's own - and
+	// for a group what it clips to, as set.
 	case W_PUGL_ARG_SIZE:
+		if (im->group) {
+			arg->pair.x = (float)im->w;
+			arg->pair.y = (float)im->h;
+			*type = RXT_PAIR;
+			break;
+		}
 		arg->pair.x = (float)(im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image));
 		arg->pair.y = (float)(im->h > 0 ? im->h : (REBINT)IMG_HIGH((REBSER*)im->image));
 		*type = RXT_PAIR;
@@ -1148,7 +1168,8 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		im->y = (REBINT)arg->pair.y;
 		break;
 
-	// A zero axis is the image's own, so `0x0` undoes a scaling.
+	// A zero axis is the image's own, so `0x0` undoes a scaling - and for
+	// a group it is not clipped, so `0x0` stops clipping.
 	case W_PUGL_ARG_SIZE:
 		if (*type != RXT_PAIR) return PE_BAD_SET_TYPE;
 		if (arg->pair.x < 0 || arg->pair.y < 0
@@ -1190,6 +1211,8 @@ int PuglImage_mold(REBHOB *hob, REBSER *str)
 		PUGLNODE *c;
 		for (c = (PUGLNODE*)im->children; c; c = (PUGLNODE*)c->next) count++;
 		APPEND_STRING(str, "%u at %dx%d", (unsigned)count, (int)im->x, (int)im->y);
+		if (im->w > 0 || im->h > 0)
+			APPEND_STRING(str, " clip %dx%d", (int)im->w, (int)im->h);
 	} else if (im->win && im->image) {
 		APPEND_STRING(str, "%dx%d at %dx%d",
 			(int)(im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image)),

@@ -160,7 +160,11 @@ bounds-of: function [
 	box: none
 	foreach node list [
 		part: either node/type = 'pugl-group [
-			if inner: bounds-of node/images [
+			inner: bounds-of node/images
+			;; A clipping group takes its own size, whatever is in it.
+			clip: node/size
+			if all [clip/x > 0  clip/y > 0][inner: reduce [0x0 clip]]
+			if inner [
 				reduce [inner/1 + node/offset  inner/2 + node/offset]
 			]
 		][
@@ -292,6 +296,7 @@ print ["offset:          " grp/offset "(expected 300x200)"]
 print ["visible?:        " grp/visible? "(expected true)"]
 print ["track?:          " grp/track? "(expected false)"]
 print ["hover?:          " grp/hover? "(expected false)"]
+print ["size:            " grp/size "(expected 0x0 - not clipped)"]
 print ["its window:      " grp/window == window "(expected true)"]
 print ["parent:          " grp/parent == stage "(expected true)"]
 print ["images:          " mold grp/images "(expected [])"]
@@ -315,10 +320,10 @@ print ["nested window:   " g3/window == window "(expected true)"]
 print ["relative offset: " g3/offset "(expected 15x0)"]
 print ["top level parent:" mold stage/parent "(expected none)"]
 
-print ["no size:         " error? try [grp/size]]
 print ["no image:        " error? try [grp/image]]
 print ["images of image: " error? try [g1/images]]
-print ["a size refused:  " error? try [grp/size: 10x10]]
+print ["a bad clip:      " error? try [grp/size: -1x10]]
+print ["bad /size:       " error? try [add-group/size grp 0x0 0x-1]]
 print ["read-only images:" error? try [grp/images: []]]
 print ["add to an image: " error? try [add-image g1 dot 0x0]]
 print ["group in image:  " error? try [add-group g1 0x0]]
@@ -349,6 +354,48 @@ center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 release tmp-img
 release tmp
+
+;;=============================================================================
+print as-yellow "^/== Clipping"
+;;=============================================================================
+
+;; A group with a size shows what is in it only inside that box from its
+;; origin - a viewport onto a big image, scrolled by moving the image. The
+;; clipped away part is not there for the pointer either. Clips nest: what
+;; is in a clipping group in a clipping group is inside both.
+big: make image! 256x256  paint big 128
+viewport: add-group/size stage 360x200 64x64
+print ["viewport:        " viewport "(expected 0 at 360x200 clip 64x64)"]
+print ["size:            " viewport/size "(expected 64x64)"]
+scroll: add-image viewport big 0x0
+print ["image's size:    " scroll/size "(expected 256x256 - not clipped itself)"]
+nested: add-group/size viewport 40x40 64x64
+corner: add-image nested dot 12x12
+center-content
+print ["counts its clip: " (second bounds-of reduce [viewport]) - (first bounds-of reduce [viewport]) "(expected 64x64)"]
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+
+;; WATCH: a 64x64 piece of a big gradient, right of the white squares, with
+;; a white 12x12 square in its bottom-right corner - the rest of that
+;; 24x24 one is outside the viewport.
+wait 0.5
+;; WATCH: the gradient scrolls up and left, to its bottom-right corner.
+repeat i 24 [scroll/offset: scroll/offset - 8x8  wait 0.02]
+print ["scrolled:        " scroll/offset "(expected -192x-192)"]
+;; WATCH: the whole big image, over the other ones - then cut back.
+viewport/size: 0x0
+center-content
+print ["not clipped:     " viewport "(expected 2 at 360x200)"]
+wait 0.5
+viewport/size: 64x64
+center-content
+print ["clipped again:   " viewport/size "(expected 64x64)"]
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+;; One axis only: clipped horizontally, the whole height shows.
+viewport/size: 64x0
+wait 0.3
+viewport/size: 64x64
+scroll/offset: -96x-96   ;; the middle of the big image
 
 ;;=============================================================================
 print as-yellow "^/== An icon"
@@ -401,6 +448,8 @@ The two big images, the group of white squares, its lower square's group
 and the top-left square report `enter` and `leave` themselves (as the event
 source); the window reports its own when the pointer crosses its edge.
 Moving between the squares of the group does not leave the group.
+The viewport and the big image in it are tracked too: over its clipped
+away part there is nothing to enter.
 Resize the window by dragging its edge - the images are not stretched, and
 are moved back to the middle as soon as the resize is reported (on Windows
 when the drag ends: its modal resize loop does not let the script run).
@@ -419,6 +468,8 @@ img2/track?:  true
 grp/track?:   true
 inner/track?: true
 g1/track?:    true
+viewport/track?: true
+scroll/track?:   true
 
 ;; Handles compare by type only with `=`, so blocks of them are searched
 ;; with `==`.
@@ -447,7 +498,15 @@ top-at: function [list [block!] point [pair!]][
 	foreach node list [
 		unless node/visible? [continue]
 		either node/type = 'pugl-group [
-			if found: top-at node/images point - node/offset [hit: found]
+			inside: point - node/offset
+			clip: node/size
+			;; What a group clips away is not there to be hit.
+			unless any [
+				all [clip/x > 0  any [inside/x < 0  inside/x >= clip/x]]
+				all [clip/y > 0  any [inside/y < 0  inside/y >= clip/y]]
+			][
+				if found: top-at node/images inside [hit: found]
+			]
 		][
 			if all [
 				point/x >= node/offset/x  point/y >= node/offset/y
