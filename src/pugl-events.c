@@ -46,9 +46,10 @@ PuglStatus Pugl_On_Event(PuglView *view, const PuglEvent *event) {
 		return PUGL_SUCCESS;
 
 	case PUGL_CONFIGURE:
-		// The image is centered, so a new size moves it - and the OS only
-		// asks for the damaged part to be redrawn (on X11 a window which
-		// shrinks gets no expose at all). The whole view is redrawn
+		// The projection is the window's size, so a new size changes every
+		// pixel - and the OS only asks for the damaged part to be redrawn
+		// (on X11 a window which shrinks gets no expose at all). The whole
+		// view is redrawn
 		// instead; from within the handler the expose follows at the end
 		// of this same loop iteration - and during a live resize on
 		// Windows, inside the OS's own modal loop, where nothing of ours

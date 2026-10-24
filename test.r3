@@ -59,9 +59,10 @@ print as-yellow "^/== Closing a window"
 ;; A closed window keeps its handle: it reports `open?` false and none for
 ;; everything else, rather than pointing at freed memory.
 spare: open-window/hidden 200x100
+spare-img: add-image spare make image! 8x8 0x0
 print ["spare:           " spare]
 print ["open?:           " spare/open? "(expected true)"]
-print ["close-window:      " close-window spare "(expected true)"]
+print ["close-window:    " close-window spare "(expected true)"]
 print ["open? after:     " spare/open? "(expected false)"]
 print ["size after:      " mold spare/size "(expected none)"]
 print ["title after:     " mold spare/title "(expected none)"]
@@ -70,7 +71,12 @@ print ["molded:          " spare "(expected closed)"]
 print ["closing twice:   " close-window spare "(expected true)"]
 print ["show refused:    " error? try [show-window spare]]
 print ["redraw refused:  " error? try [redraw spare]]
-print ["image after:     " mold spare/image "(expected none)"]
+print ["images after:    " mold spare/images "(expected none)"]
+print ["add-image refused:" error? try [add-image spare make image! 8x8 0x0]]
+;; Closing a window removes its images; their handles stay, and say so.
+print ["its image:       " spare-img "(expected removed)"]
+print ["image's window:  " mold spare-img/window "(expected none)"]
+release spare-img
 print ["icon after:      " mold spare/icon "(expected none)"]
 print ["icon refused:    " error? try [spare/icon: make image! 16x16]]
 print ["set refused:     " error? try [spare/title: "x"]]
@@ -82,7 +88,7 @@ print as-yellow "^/== Bad arguments"
 
 print ["zero size:       " error? try [open-window 0x10]]
 print ["too big:         " error? try [open-window 20000x10]]
-print ["not a window:      " error? try [show-window 42]]
+print ["not a window:    " error? try [show-window 42]]
 
 ;;=============================================================================
 print as-yellow "^/== Polling"
@@ -119,14 +125,14 @@ print ["hidden again:    " not window/visible?]
 show-window window
 
 ;;=============================================================================
-print as-yellow "^/== An image"
+print as-yellow "^/== Images"
 ;;=============================================================================
 
+;; `add-image` puts an image in the window and returns a handle of its own.
 ;; The window keeps a REFERENCE to the image, not a copy - so drawing into
-;; `pic` and calling `redraw` is all it takes to change what is on screen.
-;; It is drawn at its own size, in device pixels, centered in the window.
-pic: make image! 256x256
-
+;; it and calling `redraw` is all it takes to change what is on screen.
+;; Images are drawn in the order they were added: the first at the bottom.
+;; Offsets and sizes are in device pixels, from the window's top-left.
 paint: function ["Fills the image with a gradient" img [image!] shift [integer!]][
 	size: img/size
 	repeat y size/y [
@@ -139,45 +145,82 @@ paint: function ["Fills the image with a gradient" img [image!] shift [integer!]
 		]
 	]
 ]
-paint pic 0
+pic:   make image! 256x256  paint pic 0
+small: make image! 64x64    paint small 255
 
-print ["image before:    " mold window/image "(expected none)"]
-window/image: pic
-print ["the same series: " same? window/image pic "(expected true)"]
-;; NEVER mold an image! into the console - only its type and size.
-shown: window/image
-print ["image is:        " type? shown "size:" shown/size "(expected 256x256)"]
-shown: none
-print ["a string refused:" error? try [window/image: "x"]]
-print ["redraw:          " redraw window "(expected true)"]
+print ["images before:   " mold window/images "(expected [])"]
+img1: add-image window pic 20x20
+print ["image handle:    " img1 "(expected 256x256 at 20x20)"]
+print ["the handle type: " img1/type]
+print ["the same series: " same? img1/image pic "(expected true)"]
+print ["offset:          " img1/offset "(expected 20x20)"]
+print ["size:            " img1/size "(expected 256x256 - its own)"]
+print ["visible?:        " img1/visible? "(expected true)"]
+print ["its window:      " img1/window == window "(expected true)"]
 
-;; Where it lands: half the spare room on each side, in whole pixels.
-;; Pixels cannot be read back from the screen, so this prints where the
-;; image's corner should be and the scene below shows it.
-image-at: func [/local d][
-	d: window/size - pic/size
-	;; truncated, as C's integer division does it - also when negative
-	as-pair to integer! d/x / 2  to integer! d/y / 2
-]
-print ["window size:       " window/size]
-print ["image corner at: " image-at "(centered)"]
+;; The same image twice: scaled to twice its size, and at its own over pic.
+img2: add-image/size window small 300x40 128x128
+img3: add-image window small 200x200
+print ["scaled:          " img2/size "(expected 128x128)"]
+print ["in order:        " all [
+	3 = length? window/images
+	window/images/1 == img1  window/images/2 == img2  window/images/3 == img3
+] "(expected true)"]
 
-;; WATCH: a gradient in the middle of the window, black at its top-left, red
-;; to the right, green downwards, with an equal black border left and right,
-;; and top and bottom. It goes away and comes back.
+print ["not an image:    " error? try [add-image window "x" 0x0]]
+print ["an empty image:  " error? try [add-image window make image! 0x0 0x0]]
+print ["a negative size: " error? try [add-image/size window small 0x0 -1x10]]
+print ["not a window:    " error? try [add-image img1 small 0x0]]
+print ["set a string:    " error? try [img1/image: "x"]]
+print ["an unknown word: " error? try [img1/foo]]
+print ["redraw an image: " redraw img1 "(expected true)"]
+print ["redraw a window: " redraw window "(expected true)"]
+
+;; A path going on PAST a handle field: the handle's answer is in the
+;; path's scratch cell, and the image getter used to overwrite its own
+;; input there - this crashed the interpreter.
+print ["image/size:      " img1/image/size "(expected 256x256)"]
+print ["image/width:     " img1/image/width "(expected 256)"]
+print ["image/height:    " img1/image/height "(expected 256)"]
+
+;; WATCH: a big gradient at the top-left, the small one twice its size to
+;; its right, and once at its own size over the bottom-right corner of the
+;; big one - on TOP of it, as it was added later.
 wait 0.5
-window/image: none
-print ["removed:         " mold window/image "(expected none)"]
-wait 0.5
-window/image: pic
 
-;; WATCH: the image stays centered as the window changes size - smaller than
-;; the image too, where it is cropped equally on both sides.
-foreach size [400x300 300x400 200x150 480x320] [
-	window/size: size
-	wait 0.4
-	print ["window size:       " pad window/size 9 "image corner at:" image-at]
-]
+;; WATCH: the small one on top slides right and back.
+repeat i 20 [img3/offset: img3/offset + 5x0  wait 0.02]
+repeat i 20 [img3/offset: img3/offset - 5x0  wait 0.02]
+print ["moved back:      " img3/offset "(expected 200x200)"]
+
+;; WATCH: the scaled one blinks, then shrinks to its own size and back.
+img2/visible?: false  wait 0.3
+img2/visible?: true   wait 0.3
+img2/size: 0x0
+print ["own size again:  " img2/size "(expected 64x64)"]
+wait 0.3
+img2/size: 128x128
+
+;; WATCH: drawing into `small` changes BOTH images showing it - one redraw
+;; of the window uploads it for each.
+paint small 0
+redraw window
+wait 0.3
+
+;; Another image in place of the one shown, of another size.
+img3/image: make image! [32x32 255.200.0]
+print ["swapped:         " img3/size "(expected 32x32)"]
+wait 0.3
+
+;; Removed: the handle stays, and answers none for everything.
+print ["remove-image:    " remove-image img3 "(expected true)"]
+print ["images:          " length? window/images "(expected 2)"]
+print ["removed:         " img3 "(expected removed)"]
+print ["offset after:    " mold img3/offset "(expected none)"]
+print ["removing twice:  " remove-image img3 "(expected true)"]
+print ["set refused:     " error? try [img3/offset: 0x0]]
+print ["redraw refused:  " error? try [redraw img3]]
+release img3
 
 ;;=============================================================================
 print as-yellow "^/== An icon"
@@ -217,13 +260,6 @@ window/icon: ico   ;; WATCH: now without the blue tint
 window/icon: pic
 print ["a bigger icon:   " window/icon/size "(expected 256x256)"]
 
-;; A path going on PAST a handle field: the handle's answer is in the
-;; path's scratch cell, and the image getter used to overwrite its own
-;; input there - `window/image/size` crashed the interpreter.
-print ["image/size:      " window/image/size "(expected 256x256)"]
-print ["image/width:     " window/image/width "(expected 256)"]
-print ["image/height:    " window/image/height "(expected 256)"]
-
 ;;=============================================================================
 print as-yellow "^/== Events"
 ;;=============================================================================
@@ -231,10 +267,10 @@ print as-yellow "^/== Events"
 print {
 Move the mouse over the window, click (left, right, middle), use the wheel,
 type, resize and move it, switch to another window and back.
-A left click repaints the image in a new colour.
-Resize the window by dragging its edge - the image stays centered WHILE
-dragging, shrinking as well as growing, with no stale copy left behind.
-A click on it is reported with its position on the image too.
+A left click on an image repaints it in a new colour - the topmost one
+under the pointer - and reports where on it the click was.
+Resize the window by dragging its edge - the images stay where they are,
+unstretched, while dragging.
 ESCAPE or the close button ends the test.
 }
 
@@ -243,7 +279,20 @@ ESCAPE or the close button ends the test.
 last-move: 0x0
 pressed: none   ;; the button between its `down` and its `up`
 
-report: func [event /local type position d on-image][
+;; The topmost image under a point, or none - the last one added is on top.
+image-at: function [point [pair!]][
+	foreach img reverse copy window/images [
+		if all [
+			img/visible?
+			point/x >= img/offset/x  point/y >= img/offset/y
+			point/x <  (img/offset/x + img/size/x)
+			point/y <  (img/offset/y + img/size/y)
+		][return img]
+	]
+	none
+]
+
+report: func [event /local type position d hit][
 	type:     event/type
 	position: event/offset
 
@@ -277,13 +326,9 @@ report: func [event /local type position d on-image][
 		]
 	]
 
-	;; A resize carries the new size, which the window reports back - and
-	;; moves the centered image.
-	if type = 'resize [
-		if position <> window/size [
-			print as-red ["!! resize to" position "but size is" window/size]
-		]
-		print ["  image corner now at" image-at]
+	;; A resize carries the new size, which the window reports back.
+	if all [type = 'resize  position <> window/size] [
+		print as-red ["!! resize to" position "but size is" window/size]
 	]
 
 	;; Escape ends it; `do-events` sees the window closed and returns.
@@ -292,22 +337,18 @@ report: func [event /local type position d on-image][
 		close-window window
 	]
 
-	;; Drawing into the very image the window was given, then asking for it
-	;; to be shown. Nothing is copied.
+	;; Drawing into the very image the window shows, then asking for it to
+	;; be shown again. Nothing is copied. A scaled image is drawn at a size
+	;; other than its own, so where on its pixels is worked out from both.
 	if type = 'down [
-		;; The image is centered, so its own coordinates are the event's
-		;; minus where its corner is.
-		on-image: position - image-at
-		either all [
-			on-image/x >= 0  on-image/y >= 0
-			on-image/x < pic/size/x  on-image/y < pic/size/y
+		either hit: image-at position [
+			print ["  on" hit "at pixel"
+				(position - hit/offset) * hit/image/size / hit/size]
+			paint hit/image random 256
+			redraw hit
 		][
-			print ["  on the image at" on-image]
-		][
-			print ["  outside the image"]
+			print "  on no image"
 		]
-		paint pic random 256
-		redraw window
 	]
 
 	if type = 'close [print ["Closing window:" event/source]]
@@ -329,7 +370,8 @@ do-events window :report
 
 print ["^/window closed - open?:" window/open? "(expected false)"]
 print ["molded:" window "(expected closed)"]
-print ["image after close:" mold window/image "(expected none)"]
+print ["images after close:" mold window/images "(expected none)"]
+print ["img1 after close:" img1 "(expected removed)"]
 print ["the image survives:" type? pic pic/size]
 release window
 print ["released:" window]

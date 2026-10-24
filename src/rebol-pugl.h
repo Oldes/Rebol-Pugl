@@ -44,11 +44,16 @@ void       Pugl_Draw(PUGLWIN *pv, PuglView *view);
 // pugl-commands.c
 void Pugl_Close_All_Windows(void);
 
-// View handle callbacks. Named after the HANDLE TYPE (PUGL-WINDOW); that is
-// a different identifier from Pugl's own `PuglView` typedef.
+// Handle callbacks, named after the HANDLE TYPE (PUGL-WINDOW, PUGL-IMAGE).
+// PuglWindow_* is a different identifier from Pugl's own `PuglView`.
 int PuglWindow_free(void *hndl);
 int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
 int PuglWindow_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
 int PuglWindow_mold(REBHOB *hob, REBSER *str);
+
+int PuglImage_free(void *hndl);
+int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
+int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
+int PuglImage_mold(REBHOB *hob, REBSER *str);
 
 #endif

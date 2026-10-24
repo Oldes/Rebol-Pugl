@@ -69,9 +69,21 @@ Hides the window without destroying it
 #### `poll-events`
 Runs one Pugl main loop iteration and returns the collected events
 
-#### `redraw` `:window`
-Shows the window's image again - use after drawing into it
+#### `redraw` `:target`
+Shows images again - use after drawing into them
+* `target` `[handle!]` A window (all its images) or one image
+
+#### `add-image` `:window` `:image` `:offset`
+Shows an image in a window and returns its handle
 * `window` `[handle!]`
+* `image` `[image!]` Shown as is; the window keeps a reference, not a copy
+* `offset` `[pair!]` Position of its top-left corner in the window
+* `/size`
+* `sz` `[pair!]` Scales it to this size (default: the image's own)
+
+#### `remove-image` `:image`
+Takes an image out of its window
+* `image` `[handle!]`
 
 
 ## Used handles and its getters / setters
@@ -87,8 +99,19 @@ Shows the window's image again - use after drawing into it
 /id               integer!            none                          "Native view handle (HWND / NSView* / X11 Window) as an integer"
 /visible?         logic!              none                          "Whether the window is currently visible"
 /open?            logic!              none                          "False once the window has been closed"
-/image            image!              [image! none!]                "Image shown at its own size, centered in the window; none for nothing. Kept by reference - draw into it and call `redraw`"
+/images           block!              none                          "Images added with `add-image`, in drawing order - the first one at the bottom"
 /icon             image!              [image! none!]                "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
+```
+
+#### __IMAGE__ - Pugl image handle - an image! shown in a window
+
+```rebol
+;Refinement       Gets                Sets                          Description
+/image            image!              image!                        "The image shown - kept by reference: draw into it and call `redraw`"
+/offset           pair!               pair!                         "Position of its top-left corner in the window"
+/size             pair!               pair!                         "Size it is drawn at - scaled to it; a zero axis is the image's own"
+/visible?         logic!              logic!                        "Whether it is drawn"
+/window           handle!             none                          "The window it is shown in; none once removed"
 ```
 
 
