@@ -81,6 +81,11 @@ typedef struct Pugl_Window_Context {
 	// over nothing in it until the next move says otherwise.
 	void   *hover;
 	REBINT  hover_x, hover_y;
+
+	// The buttons held down (bit 0 primary, 1 secondary, 2 middle), as of
+	// the events converted so far - a move outside the window is reported
+	// only while one is, the same on every platform.
+	REBCNT  buttons;
 } PUGLWIN;
 
 // An image shown in a window, or a group of them - the same context for

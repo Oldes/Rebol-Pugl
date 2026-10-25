@@ -171,6 +171,13 @@ eggs: [
 		:target-x64
 		:make-extension
 	]
+	"Rebol Pugl extension: arm64" [
+		name: %pugl-arm64
+		flag: shared
+		:backend-gl
+		:target-arm64
+		:make-extension
+	]
 	"Example: pugl_print_events (stub)" [
 		name: %pugl_print_events
 		files: [%pugl/examples/pugl_print_events.c]

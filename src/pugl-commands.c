@@ -489,6 +489,8 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 	case PUGL_BUTTON_RELEASE:
 		// Primary, secondary, middle - nothing above is reported yet.
 		if (e->button.button > 2) break;
+		if (e->type == PUGL_BUTTON_PRESS) pv->buttons |=  (1u << e->button.button);
+		else                              pv->buttons &= ~(1u << e->button.button);
 		Hover_To(blk, at, pv, (REBINT)e->button.x, (REBINT)e->button.y, TRUE);
 		Append_Event(blk, at, pv,
 			(e->type == PUGL_BUTTON_PRESS ? Down_Types : Up_Types)[e->button.button],
@@ -497,6 +499,13 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		break;
 
 	case PUGL_MOTION:
+		// macOS sends the key window every move, the pointer inside it or
+		// not (pugl sets acceptsMouseMovedEvents); Windows and X11 send
+		// those only while a button is held - a drag going outside. Made
+		// the same here: outside, and nothing held, is not reported.
+		if (!pv->buttons
+		 && (e->motion.x < 0 || e->motion.y < 0
+		  || e->motion.x >= pv->w || e->motion.y >= pv->h)) break;
 		Hover_To(blk, at, pv, (REBINT)e->motion.x, (REBINT)e->motion.y, TRUE);
 		Append_Event(blk, at, pv, EVT_MOVE,
 			HAS_XY | Modifier_Bits(e->motion.state),
@@ -538,6 +547,9 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 
 	case PUGL_FOCUS_IN:
 	case PUGL_FOCUS_OUT:
+		// A release can happen where this window does not see it - over
+		// another one which took the focus - so nothing is held any more.
+		if (e->type == PUGL_FOCUS_OUT) pv->buttons = 0;
 		Append_Event(blk, at, pv,
 			e->type == PUGL_FOCUS_IN ? EVT_ACTIVE : EVT_INACTIVE, HAS_XY, 0);
 		break;

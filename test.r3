@@ -755,7 +755,7 @@ report: func [event /local type position d hit src][
 	;; `leave` of a tracked image or group, that one.
 	src: event/source
 	either find [pugl-image pugl-group] src/type [
-		unless find [enter leave] type [print as-red ["!!" type "from" src/type]]
+		unless find [enter leave] type [print as-red reform ["!!" type "from" src/type]]
 		unless src/track? [print as-red "!! not tracked"]
 		unless src/window == window [print as-red "!! of another window"]
 		either type = 'enter [
@@ -763,11 +763,11 @@ report: func [event /local type position d hit src][
 			;; and after the tracked groups around it.
 			if has? over src [print as-red "!! entered twice"]
 			unless has? chain-of image-at position src [
-				print as-red ["!! entered what is not on top at" position]
+				print as-red reform ["!! entered what is not on top at" position]
 			]
 			foreach up next chain-of src [
 				if all [up/track?  not has? over up] [
-					print as-red ["!! entered before its group" up]
+					print as-red reform ["!! entered before its group" up]
 				]
 			]
 			append over src
@@ -776,7 +776,7 @@ report: func [event /local type position d hit src][
 			unless has? over src [print as-red "!! left what was not entered"]
 			foreach node over [
 				if all [not node == src  has? chain-of node src] [
-					print as-red ["!! left before" node "in it"]
+					print as-red reform ["!! left before" node "in it"]
 				]
 			]
 			remove-each node over [node == src]
@@ -790,12 +790,12 @@ report: func [event /local type position d hit src][
 		unless event/source == window [print as-red "!! event from another window"]
 	]
 	;; The window's own leave comes after those of what is in it.
-	if all [type = 'leave  not empty? over] [print as-red ["!! left the window while in" length? over]]
+	if all [type = 'leave  not empty? over] [print as-red reform ["!! left the window while in" length? over]]
 
 	;; Each press must be answered by exactly one release of the same kind.
 	switch type [
 		down alt-down aux-down [
-			if pressed [print as-red ["!!" type "while" pressed "is still open"]]
+			if pressed [print as-red reform ["!!" type "while" pressed "is still open"]]
 			pressed: type
 		]
 		up [unless pressed = 'down [print as-red "!! up without down"]  pressed: none]
@@ -809,7 +809,7 @@ report: func [event /local type position d hit src][
 			position/x >= 0  position/y >= 0
 			position/x < window/size/x  position/y < window/size/y
 		][
-			print as-red ["!! move outside the window:" position]
+			print as-red reform ["!! move outside the window:" position]
 		]
 	]
 
@@ -817,10 +817,10 @@ report: func [event /local type position d hit src][
 	;; the content goes back to the middle.
 	if type = 'resize [
 		if position <> window/size [
-			print as-red ["!! resize to" position "but size is" window/size]
+			print as-red reform ["!! resize to" position "but size is" window/size]
 		]
 		center-content
-		unless centered? [print as-red ["!! not centered, stage at" stage/offset]]
+		unless centered? [print as-red reform ["!! not centered, stage at" stage/offset]]
 	]
 
 	;; Escape ends it; `do-events` sees the window closed and returns.
