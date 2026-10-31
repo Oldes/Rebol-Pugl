@@ -1327,6 +1327,7 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	case W_PUGL_ARG_PIVOT:
 	case W_PUGL_ARG_OPACITY:
 	case W_PUGL_ARG_BLEND:
+	case W_PUGL_ARG_TINT:
 	case W_PUGL_ARG_INDEX:   return TRUE;
 	}
 	return FALSE;
@@ -1485,6 +1486,15 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_INTEGER;
 		break; }
 
+	// As it was set - three values or four.
+	case W_PUGL_ARG_TINT:
+		if (!im->tint_len) { *type = RXT_NONE; break; }
+		CLEARS(arg);
+		arg->tuple_len = (REBYTE)im->tint_len;
+		COPY_MEM(arg->tuple_bytes, im->tint, im->tint_len);
+		*type = RXT_TUPLE;
+		break;
+
 	// Its own - none when it goes by its group's.
 	case W_PUGL_ARG_BLEND:
 		if (!im->blend) { *type = RXT_NONE; break; }
@@ -1590,6 +1600,16 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
 		break; }
+
+	// Red, green and blue - and alpha, when there is a fourth value; the
+	// rest of a longer tuple is not colour, and is refused.
+	case W_PUGL_ARG_TINT:
+		if (*type == RXT_NONE) { im->tint_len = 0; break; }
+		if (*type != RXT_TUPLE) return PE_BAD_SET_TYPE;
+		if (arg->tuple_len < 3 || arg->tuple_len > 4) return PE_BAD_SET;
+		im->tint_len = arg->tuple_len;
+		COPY_MEM(im->tint, arg->tuple_bytes, im->tint_len);
+		break;
 
 	case W_PUGL_ARG_FILL: {
 		REBCNT mode;

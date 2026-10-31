@@ -140,6 +140,7 @@ The topmost visible image at a point of the window, or none - where it is drawn,
 /pivot            pair!               pair!                         "Point it is turned and scaled around, in its own units from its top-left (default 0x0)"
 /opacity          percent!            [percent! decimal! integer!]  "How opaque it is, 0% to 100% (default 100%); still there for the pointer at 0%"
 /blend            word!               [word! none!]                 "How it is drawn over what is below: normal, add, multiply or screen; none (default) for its group's"
+/tint             tuple!              [tuple! none!]                "A colour its own is multiplied by - a fourth value is alpha, 255 opaque, multiplied with its opacity; none (default) for none"
 /index            integer!            [integer! word!]              "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it"
 ```
 
@@ -160,6 +161,7 @@ The topmost visible image at a point of the window, or none - where it is drawn,
 /pivot            pair!               pair!                         "Point it is turned and scaled around, in its own units from its origin (default 0x0)"
 /opacity          percent!            [percent! decimal! integer!]  "How opaque all in it is, 0% to 100% (default 100%), multiplied with their own"
 /blend            word!               [word! none!]                 "How what is in it is drawn, where it does not say itself: normal, add, multiply or screen; none (default) for its own group's"
+/tint             tuple!              [tuple! none!]                "A colour all in it is multiplied by, on top of their own tint - a fourth value is alpha; none (default) for none"
 /index            integer!            [integer! word!]              "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it, with all in it"
 ```
 

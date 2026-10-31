@@ -861,6 +861,43 @@ pattern/fill: 'round  wait 0.5
 pattern/fill: 'tile
 print ["pattern:         " pattern/size mold pattern/fill "(expected 80x48 tile)"]
 
+;;=============================================================================
+print as-yellow "^/== Tint"
+;;=============================================================================
+
+;; A colour an image's own is multiplied by - through groups, like opacity,
+;; so a group's tint is on top of what is in it. A fourth value is alpha,
+;; 255 opaque, multiplied with the opacity. Nothing is uploaded again.
+print ["tint:            " mold img1/tint "(expected none)"]
+img1/tint: 255.128.128
+print ["set:             " mold img1/tint "(expected 255.128.128)"]
+img1/tint: 255.255.255.128
+print ["with alpha:      " mold img1/tint "(expected 255.255.255.128)"]
+print ["two values:      " error? try [img1/tint: 1.2]]
+print ["five values:     " error? try [img1/tint: 1.2.3.4.5]]
+print ["not a tuple:     " error? try [img1/tint: 255]]
+img1/tint: none
+print ["none again:      " mold img1/tint "(expected none)"]
+print ["of a group:      " mold grp/tint "(expected none)"]
+
+;; WATCH: the big gradient darkens to black and comes back - one image,
+;; no upload.
+repeat i 10 [img1/tint: to tuple! reduce [255 - (i * 25)  255 - (i * 25)  255 - (i * 25)]  wait 0.03]
+repeat i 10 [img1/tint: to tuple! reduce [i * 25 + 5  i * 25 + 5  i * 25 + 5]  wait 0.03]
+img1/tint: none
+
+;; WATCH: the white squares turn red - the group's tint - and the top-left
+;; one black: its own green times the group's red.
+grp/tint: 255.0.0     wait 0.4
+g1/tint:  0.255.0     wait 0.4
+print ["times the group: " mold g1/tint mold grp/tint "(expected 0.255.0 255.0.0)"]
+g1/tint: none
+grp/tint: none
+
+;; WATCH: the tiled pattern at half alpha, through its tint.
+pattern/tint: 255.255.255.128  wait 0.4
+pattern/tint: none
+
 ;; The extension's hit test and the test's own agree everywhere - over all
 ;; of the above: turned, scaled, clipped, nested, hidden.
 disagree: 0

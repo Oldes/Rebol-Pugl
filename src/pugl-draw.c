@@ -325,6 +325,7 @@ static void Stencil_Box(const PUGLNODE *g, const PUGLXFORM *m, GLint level, int 
 **  The blend function of a mode - for premultiplied colour, which is
 **  what the textures hold and what glColor4f(a, a, a, a) keeps them.
 ***********************************************************************/
+static const float White[3] = { 1.0f, 1.0f, 1.0f };   // no tint
 static REBCNT Blend_Now;   // the mode set last, so it is set only on a change
 
 static void Set_Blend(REBCNT mode)
@@ -349,12 +350,12 @@ static void Set_Blend(REBCNT mode)
 **  up, draws what is in it at that level, and takes the mark back.
 ***********************************************************************/
 static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float alpha,
-                      REBCNT blend, GLint level, float win_w, float win_h)
+                      const float tint[3], REBCNT blend, GLint level, float win_w, float win_h)
 {
 	for (; im; im = (PUGLNODE*)im->next) {
 		REBSER   *img = (REBSER*)im->image;
 		PUGLXFORM m;
-		float     a;
+		float     a, t[3];
 		REBCNT    b;
 		REBINT    iw, ih;
 
@@ -363,16 +364,23 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 		Pugl_Xform_Mul(&m, parent, &m);
 		a = alpha * (float)im->opacity;
 		b = im->blend ? im->blend : blend;
+		t[0] = tint[0]; t[1] = tint[1]; t[2] = tint[2];
+		if (im->tint_len) {
+			t[0] *= im->tint[0] / 255.0f;
+			t[1] *= im->tint[1] / 255.0f;
+			t[2] *= im->tint[2] / 255.0f;
+			if (im->tint_len > 3) a *= im->tint[3] / 255.0f;
+		}
 
 		if (im->group) {
 			REBOOL clips = (im->w > 0 || im->h > 0) && level < 255;
 			if (!clips) {
-				Draw_List(win, (PUGLNODE*)im->children, &m, a, b, level, win_w, win_h);
+				Draw_List(win, (PUGLNODE*)im->children, &m, a, t, b, level, win_w, win_h);
 				continue;
 			}
 			Stencil_Box(im, &m, level, +1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level + 1, 0xFF);
-			Draw_List(win, (PUGLNODE*)im->children, &m, a, b, level + 1, win_w, win_h);
+			Draw_List(win, (PUGLNODE*)im->children, &m, a, t, b, level + 1, win_w, win_h);
 			Stencil_Box(im, &m, level + 1, -1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level, 0xFF);
 			continue;
@@ -388,8 +396,9 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 
 		Load_Xform(&m);
 		Set_Blend(b);
-		// All four: the colour is premultiplied, so it fades with the alpha.
-		glColor4f(a, a, a, a);
+		// The colour is premultiplied, so it fades with the alpha - and the
+		// tint multiplies it, premultiplied the same way.
+		glColor4f(t[0] * a, t[1] * a, t[2] * a, a);
 		Image_Quads(im, iw, ih);
 	}
 }
@@ -441,7 +450,7 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 	glStencilFunc(GL_EQUAL, 0, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 
-	Draw_List(pv, (PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, W_PUGL_BLEND_NORMAL, 0,
+	Draw_List(pv, (PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, White, W_PUGL_BLEND_NORMAL, 0,
 	          (float)area.width, (float)area.height);
 
 	glDisable(GL_STENCIL_TEST);
