@@ -126,6 +126,51 @@ cases: [
 	"Smooth, no shear; the edges between pieces may soften a little"
 	[img: nine 0x0 300x100  img/filter: 'linear]
 
+	"Tiled, shrinking from big to small - animated"
+	"No white line flickering inside the dark middle: a white line there would be the edge's texels leaking in"
+	[img: nine 0x0 400x300  img/fill: 'tile
+	 repeat i 80 [img/size: as-pair 400 - (i * 4.7)  300 - (i * 3.5)  wait 0.03]
+	 img/size: 400x300]
+
+	"Rounded, shrinking from big to small - animated"
+	"The same: no flickering lines between the repeats, and no gaps"
+	[img: nine 0x0 400x300  img/fill: 'round
+	 repeat i 80 [img/size: as-pair 400 - (i * 4.7)  300 - (i * 3.5)  wait 0.03]
+	 img/size: 400x300]
+
+	"A pattern - the whole image tiled over 400x300, not nine-scaled"
+	"One shape, the image repeated by the GPU at its own size: 16 across, the last row and column cut"
+	[img: add-image/size content frame 0x0 400x300  img/fill: 'tile]
+
+	"A pattern of an atlas part, 400x300"
+	"The second copy repeated - nothing of the magenta beside it in the atlas"
+	[img: add-image/size/part content atlas 0x0 400x300 [24x0 24x24]  img/fill: 'tile]
+
+	"A pattern, its part switched"
+	"Frame, all magenta (the atlas' first part), frame again - its copy follows the part"
+	[img: add-image/size/part content atlas 0x0 400x300 [24x0 24x24]  img/fill: 'tile
+	 wait 0.6  img/part: [0x0 24x24]
+	 wait 0.6  img/part: [24x0 24x24]]
+
+	"A pattern, rounded - 290x95"
+	"Whole repeats only - 12 by 4 - each a little squeezed"
+	[img: add-image/size content frame 0x0 290x95  img/fill: 'round]
+
+	"A pattern, linear filter, scaled 1.5"
+	"Smooth, and seamless across the repeats - no lines where they meet"
+	[img: add-image/size content frame 0x0 260x200  img/fill: 'tile  img/filter: 'linear  img/scale: 1.5]
+
+	"A pattern, turned 15 degrees"
+	"One turned shape - the repeats turned with it, no seams"
+	[img: add-image/size content frame 100x50 300x200  img/fill: 'tile
+	 img/pivot: 150x100  img/rotation: 15]
+
+	"A pattern, shrinking from big to small - animated"
+	"No flicker, no lines - the repeats only get fewer"
+	[img: add-image/size content frame 0x0 400x300  img/fill: 'tile
+	 repeat i 80 [img/size: as-pair 400 - (i * 4.7)  300 - (i * 3.5)  wait 0.03]
+	 img/size: 400x300]
+
 	"Window scale 1.5 - zoomed"
 	"Everything 1.5 times bigger, the reference too; pixels uneven with nearest, but no shear"
 	[nine 0x0 200x100  window/scale: 1.5]

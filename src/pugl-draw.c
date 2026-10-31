@@ -49,11 +49,14 @@ PuglStatus Pugl_Setup_Backend(PuglView *view)
 **  right with alpha - with straight alpha, `multiply` and `screen` would
 **  ignore it. NULL if there is no memory for it.
 ***********************************************************************/
-static REBYTE *Premultiplied(const REBYTE *bgra, REBINT w, REBINT h)
+// The box x, y, w, h of an image `iw` pixels wide, premultiplied - the
+// whole of it, or a part copied out for a pattern.
+static REBYTE *Premultiplied_Part(const REBYTE *bgra, REBINT iw,
+                                  REBINT x, REBINT y, REBINT w, REBINT h)
 {
 	static REBYTE *buf  = NULL;
 	static REBCNT  size = 0;
-	REBCNT need = (REBCNT)w * (REBCNT)h * 4, n;
+	REBCNT need = (REBCNT)w * (REBCNT)h * 4, n, row;
 
 	if (need > size) {
 		REBYTE *grown = (REBYTE*)MAKE_MEM(need);
@@ -62,15 +65,42 @@ static REBYTE *Premultiplied(const REBYTE *bgra, REBINT w, REBINT h)
 		buf  = grown;
 		size = need;
 	}
-	for (n = 0; n < need; n += 4) {
-		REBCNT a = bgra[n + 3];
-		// (x * a + 127) / 255 - rounded, so 255 keeps 255 and 0 gives 0.
-		buf[n]     = (REBYTE)((bgra[n]     * a + 127) / 255);
-		buf[n + 1] = (REBYTE)((bgra[n + 1] * a + 127) / 255);
-		buf[n + 2] = (REBYTE)((bgra[n + 2] * a + 127) / 255);
-		buf[n + 3] = (REBYTE)a;
+	for (row = 0; row < (REBCNT)h; row++) {
+		const REBYTE *src = bgra + (((REBCNT)(y + (REBINT)row) * (REBCNT)iw) + (REBCNT)x) * 4;
+		REBYTE       *dst = buf + row * (REBCNT)w * 4;
+		for (n = 0; n < (REBCNT)w * 4; n += 4) {
+			REBCNT a = src[n + 3];
+			// (x * a + 127) / 255 - rounded, so 255 keeps 255 and 0 gives 0.
+			dst[n]     = (REBYTE)((src[n]     * a + 127) / 255);
+			dst[n + 1] = (REBYTE)((src[n + 1] * a + 127) / 255);
+			dst[n + 2] = (REBYTE)((src[n + 2] * a + 127) / 255);
+			dst[n + 3] = (REBYTE)a;
+		}
 	}
 	return buf;
+}
+
+static REBYTE *Premultiplied(const REBYTE *bgra, REBINT w, REBINT h)
+{
+	return Premultiplied_Part(bgra, w, 0, 0, w, h);
+}
+
+// The bound texture's sampling and its wrapping - set only on a change,
+// remembered in `*filter` and `*wrap`.
+static void Set_Sampling(REBCNT *filter, REBCNT *wrap, REBCNT want_filter, REBCNT want_wrap)
+{
+	if (*filter != want_filter) {
+		GLint sampling = (want_filter == W_PUGL_FILTER_LINEAR) ? GL_LINEAR : GL_NEAREST;
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampling);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampling);
+		*filter = want_filter;
+	}
+	if (wrap && *wrap != want_wrap) {
+		GLint mode = want_wrap ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, mode);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, mode);
+		*wrap = want_wrap;
+	}
 }
 
 /***********************************************************************
@@ -93,15 +123,14 @@ static void Upload(PUGLTEX *t, REBSER *img, REBINT w, REBINT h)
 		t->texture = (REBCNT)tex;
 		t->w = t->h = 0;
 		t->dirty = TRUE;
-		// Set at its first draw - and it must be: GL's own default wants
-		// mipmaps, which these textures do not have.
+		// Set at its first draw - and they must be: GL's own default
+		// filter wants mipmaps, which these textures do not have.
 		t->filter = 0;
+		t->wrap   = 2;
 	}
 	glBindTexture(GL_TEXTURE_2D, (GLuint)t->texture);
 	if (!t->dirty) return;
 
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 	pixels = Premultiplied((const REBYTE*)IMG_DATA(img), w, h);
 	if (!pixels) return;   // stays dirty, and is tried again next time
@@ -116,6 +145,68 @@ static void Upload(PUGLTEX *t, REBSER *img, REBINT w, REBINT h)
 		t->h = h;
 	}
 	t->dirty = FALSE;
+	t->version++;
+}
+
+/***********************************************************************
+**  A part's own texture, for filling with it as a pattern: GL_REPEAT
+**  repeats a whole texture, never a part of one - so the part is copied
+**  out of the image! into a texture of the node's. Copied again when the
+**  part, the image! or its pixels (an upload of the shared texture) have
+**  changed. Left bound. FALSE if it cannot be made.
+***********************************************************************/
+static REBOOL Pattern_Texture(PUGLNODE *im, PUGLTEX *shared, REBSER *img, REBINT iw)
+{
+	GLuint  tex;
+	REBYTE *pixels;
+
+	if (!im->pat_tex) {
+		glGenTextures(1, &tex);
+		im->pat_tex     = (REBCNT)tex;
+		im->pat_image   = NULL;   // copied below
+		im->pat_filter  = 0;
+	}
+	glBindTexture(GL_TEXTURE_2D, (GLuint)im->pat_tex);
+	if (im->pat_image == img && im->pat_version == shared->version
+	 && im->pat_x == im->part_x && im->pat_y == im->part_y
+	 && im->pat_w == im->part_w && im->pat_h == im->part_h) return TRUE;
+
+	pixels = Premultiplied_Part((const REBYTE*)IMG_DATA(img), iw,
+	                            im->part_x, im->part_y, im->part_w, im->part_h);
+	if (!pixels) return FALSE;
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, im->part_w, im->part_h, 0,
+	             GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	im->pat_image   = img;
+	im->pat_version = shared->version;
+	im->pat_x = im->part_x;  im->pat_y = im->part_y;
+	im->pat_w = im->part_w;  im->pat_h = im->part_h;
+	return TRUE;
+}
+
+/***********************************************************************
+**  An image filling its size as a pattern - one quad, the texture
+**  repeated by GL itself: texture coordinates past 1. `tile` repeats it
+**  at its own size, the last ones cut where the size ends; `round` a
+**  whole number of times, scaled a little to fit.
+***********************************************************************/
+static void Quad_Of(float w, float h, float u0, float v0, float u1, float v1);
+
+static void Pattern_Quad(const PUGLNODE *im, REBINT ow, REBINT oh)
+{
+	REBINT dw, dh;
+	float  nu, nv;
+
+	Pugl_Drawn_Size(im, &dw, &dh);
+	nu = (float)dw / ow;
+	nv = (float)dh / oh;
+	if (im->fill == W_PUGL_FILL_ROUND) {
+		nu = nu < 1.5f ? 1.0f : (float)floor(nu + 0.5f);
+		nv = nv < 1.5f ? 1.0f : (float)floor(nv + 0.5f);
+	}
+	Quad_Of((float)dw, (float)dh, 0.0f, 0.0f, nu, nv);
 }
 
 /***********************************************************************
@@ -412,26 +503,48 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 		Upload(&win->tex[im->slot - 1], img, iw, ih);
 		if (a <= 0.0f) continue;   // uploaded all the same, for when it shows
 
-		// The filter is the texture's in GL, so a texture shared by handles
-		// which want different ones is switched between them - only when
-		// the next one differs.
-		{
-			PUGLTEX *tx = &win->tex[im->slot - 1];
-			REBCNT   fl = f;
-			if (tx->filter != fl) {
-				GLint sampling = (fl == W_PUGL_FILTER_LINEAR) ? GL_LINEAR : GL_NEAREST;
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampling);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampling);
-				tx->filter = fl;
-			}
-		}
-
 		Load_Xform(&m);
 		Set_Blend(b);
 		// The colour is premultiplied, so it fades with the alpha - and the
 		// tint multiplies it, premultiplied the same way.
 		glColor4f(t[0] * a, t[1] * a, t[2] * a, a);
-		Image_Quads(im, iw, ih);
+
+		{
+			PUGLTEX *tx      = &win->tex[im->slot - 1];
+			REBOOL   pattern = !im->nine
+			                && (im->fill == W_PUGL_FILL_TILE || im->fill == W_PUGL_FILL_ROUND);
+			REBOOL   part_ok = im->part_w > 0
+			                && im->part_x + im->part_w <= iw && im->part_y + im->part_h <= ih;
+
+			// A pattern copy no longer wanted goes now - the context is
+			// current.
+			if (im->pat_tex && !(pattern && part_ok)) {
+				GLuint gone = (GLuint)im->pat_tex;
+				glDeleteTextures(1, &gone);
+				im->pat_tex = 0;
+				glBindTexture(GL_TEXTURE_2D, (GLuint)tx->texture);
+			}
+
+			if (pattern && part_ok) {
+				// A part as a pattern: its own copy, repeated.
+				if (Pattern_Texture(im, tx, img, iw)) {
+					Set_Sampling(&im->pat_filter, NULL, f, TRUE);
+					Pattern_Quad(im, im->part_w, im->part_h);
+				}
+				glBindTexture(GL_TEXTURE_2D, (GLuint)tx->texture);
+			} else if (pattern && !im->part_w) {
+				// The whole image as a pattern: its shared texture,
+				// repeated for this draw.
+				Set_Sampling(&tx->filter, &tx->wrap, f, TRUE);
+				Pattern_Quad(im, iw, ih);
+			} else {
+				// The filter and the wrapping are the texture's in GL, so a
+				// texture shared by handles which want different ones is
+				// switched between them - only when the next one differs.
+				Set_Sampling(&tx->filter, &tx->wrap, f, FALSE);
+				Image_Quads(im, iw, ih);
+			}
+		}
 	}
 }
 

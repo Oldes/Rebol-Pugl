@@ -318,6 +318,8 @@ static void Release_Node(PUGLNODE *n, PUGLWIN *win)
 		Release_Node(c, win);
 	}
 	Tex_Drop(win, n->slot);
+	Retire_Texture(win, n->pat_tex);   // a part's pattern copy, if it has one
+	n->pat_tex = 0;
 
 	n->win     = NULL;
 	n->parent  = NULL;

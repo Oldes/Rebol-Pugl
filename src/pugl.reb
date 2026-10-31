@@ -61,6 +61,8 @@ typedef struct Pugl_Texture {
 	REBCNT  refs;    // image handles using it
 	REBCNT  dirty;   // the pixels must be uploaded again
 	REBCNT  filter;  // W_PUGL_FILTER_* it is set to now, 0 before its first draw
+	REBCNT  wrap;    // repeated (TRUE) or clamped as set now; 2 before its first draw
+	REBCNT  version; // counts its uploads - a pattern copied from it knows when to copy again
 } PUGLTEX;
 
 // The payload is opaque (`view` is a void* rather than a PuglView*), so
@@ -163,6 +165,15 @@ typedef struct Pugl_Node_Context {
 	REBCNT  nine;
 	REBINT  nine_x, nine_y, nine_w, nine_h;
 	REBCNT  fill;    // W_PUGL_FILL_*, 0 for scale: how stretched pieces fill
+
+	// A part filled as a pattern repeats only itself, which GL_REPEAT on
+	// the atlas cannot do: the part is copied into a texture of its own -
+	// again when the part, the image! or its pixels (`version`) change.
+	REBCNT  pat_tex;      // GL texture name, 0 for none
+	REBCNT  pat_version;  // of the shared texture it was copied from
+	void   *pat_image;    // the image! it was copied from
+	REBINT  pat_x, pat_y, pat_w, pat_h;  // the part it holds
+	REBCNT  pat_filter;   // W_PUGL_FILTER_* it is set to now
 } PUGLNODE;
 }
 
@@ -231,7 +242,7 @@ handles: [
 		"Pugl image handle - an image! shown in a window"
 		;NAME    GET       SET       DESCRIPTION
 		image    image!    image!    "The image shown - kept by reference: draw into it and call `redraw`"
-		fill     word!     word!     "How it fills a size other than its own - scale (default); tile: repeated at its own size, the last ones cut; round: repeated a whole number of times, each scaled to fit; with nine-scale, the edges and the middle"
+		fill     word!     word!     "How it fills a size other than its own - scale (default); tile: repeated at its own size, the last ones cut; round: repeated a whole number of times, each scaled to fit. Not nine-scaled, it is a pattern: one shape, the texture repeated by the GPU - a part gets a copy of its own for it. With nine-scale, its edges and middle are repeated"
 		nine-scale block!  [block! none!] "Scales it in nine pieces - [offset size] of the middle box, in its own pixels; the corners keep their size and the edges stretch one way only; none (default) scales it whole"
 		part     block!    [block! none!] "The part of the image shown - [offset size] in its pixels, a frame of an atlas; none (default) for all of it. Set, only the first two values are used, so a block of many parts can be walked"
 		offset   pair!     pair!     "Position of its top-left corner in the window - or in its group"
