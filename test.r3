@@ -703,6 +703,59 @@ center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 
 ;;=============================================================================
+print as-yellow "^/== Nine-scale"
+;;=============================================================================
+
+;; Scaled in nine pieces, by the box of its middle - [offset size] in its
+;; own pixels: the corners keep their size, the edges stretch one way only
+;; and the middle both ways. A frame: red corners, white edges 8 pixels
+;; wide, a blue middle.
+panel: make image! [24x24 40.60.200]
+repeat y 24 [
+	repeat x 24 [
+		edge-x: any [x <= 8  x > 16]
+		edge-y: any [y <= 8  y > 16]
+		if any [edge-x edge-y][
+			panel/(as-pair x y): either all [edge-x edge-y][255.0.0][255.255.255]
+		]
+	]
+]
+box: add-image/size stage panel 30x200 120x60
+print ["nine-scale:      " mold box/nine-scale "(expected none)"]
+box/nine-scale: [8x8 8x8]
+print ["set:             " mold box/nine-scale "(expected [8x8 8x8])"]
+print ["size unchanged:  " box/size "(expected 120x60)"]
+print ["a zero middle:   " not error? try [box/nine-scale: [12x12 0x0]] "(expected true - the edges meet)"]
+box/nine-scale: [8x8 8x8]
+print ["outside:         " error? try [box/nine-scale: [8x8 20x8]]]
+print ["before the head: " error? try [box/nine-scale: [-1x8 8x8]]]
+print ["one pair:        " error? try [box/nine-scale: [8x8]]]
+print ["a string:        " error? try [box/nine-scale: "x"]]
+print ["of a group:      " error? try [grp/nine-scale]]
+;; With a part, in the part's own pixels.
+print ["in a frame:      " not error? try [twin/nine-scale: [8x8 16x16]] "(expected true)"]
+print ["past a frame:    " error? try [twin/nine-scale: [8x8 30x30]] "(expected true - 32x32 is its own size)"]
+twin/nine-scale: none
+center-content
+
+;; WATCH: over the big gradient, the frame grows wider and taller - its
+;; red corners stay 8x8 and its white edges only get longer; then it
+;; shrinks below the size of its corners, which shrink alike; then it
+;; turns, still in nine pieces.
+repeat i 20 [box/size: as-pair 120 + (i * 4)  60 + (i * 2)  wait 0.02]
+repeat i 20 [box/size: as-pair 200 - (i * 9.5)  100 - (i * 4.5)  wait 0.02]
+print ["squeezed:        " box/size "(expected 10x10)"]
+box/size: 120x60
+box/pivot: 60x30
+repeat i 18 [box/rotation: i * 5  wait 0.02]
+box/rotation: 0
+;; WATCH: scaled whole, the corners stretch with it - then nine again.
+box/nine-scale: none  wait 0.5
+box/nine-scale: [8x8 8x8]
+center-content
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+
+;;=============================================================================
 print as-yellow "^/== An icon"
 ;;=============================================================================
 

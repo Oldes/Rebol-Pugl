@@ -215,20 +215,41 @@ static void Retire_Texture(PUGLWIN *win, REBCNT tex)
 **  What follows them is not looked at, so a block of many parts can be
 **  walked - `forskip parts 2 [add-image/part w img 0x0 parts]`.
 ***********************************************************************/
-static REBOOL Read_Part(REBSER *blk, REBCNT index, REBSER *img, REBINT part[4])
+static REBOOL Read_Box(REBSER *blk, REBCNT index, REBINT max_w, REBINT max_h,
+                       REBINT min_size, REBINT box[4])
 {
 	RXIARG off, size;
 
 	if (RL_GET_VALUE(blk, index,     &off)  != RXT_PAIR) return FALSE;
 	if (RL_GET_VALUE(blk, index + 1, &size) != RXT_PAIR) return FALSE;
 
-	part[0] = (REBINT)off.pair.x;
-	part[1] = (REBINT)off.pair.y;
-	part[2] = (REBINT)size.pair.x;
-	part[3] = (REBINT)size.pair.y;
-	return part[0] >= 0 && part[1] >= 0 && part[2] > 0 && part[3] > 0
-	    && part[0] + part[2] <= (REBINT)IMG_WIDE(img)
-	    && part[1] + part[3] <= (REBINT)IMG_HIGH(img);
+	box[0] = (REBINT)off.pair.x;
+	box[1] = (REBINT)off.pair.y;
+	box[2] = (REBINT)size.pair.x;
+	box[3] = (REBINT)size.pair.y;
+	return box[0] >= 0 && box[1] >= 0 && box[2] >= min_size && box[3] >= min_size
+	    && box[0] + box[2] <= max_w && box[1] + box[3] <= max_h;
+}
+
+static REBOOL Read_Part(REBSER *blk, REBCNT index, REBSER *img, REBINT part[4])
+{
+	return Read_Box(blk, index, (REBINT)IMG_WIDE(img), (REBINT)IMG_HIGH(img), 1, part);
+}
+
+// A box as a new [offset size] block, for the getters.
+static REBOOL Box_Block(REBINT x, REBINT y, REBINT w, REBINT h, RXIARG *arg)
+{
+	REBSER *blk = (REBSER*)RL_MAKE_BLOCK(2);
+	RXIARG  val;
+	if (!blk) return FALSE;
+	CLEARS(&val);
+	val.pair.x = (float)x;  val.pair.y = (float)y;
+	RL_SET_VALUE(blk, 0, val, RXT_PAIR);
+	val.pair.x = (float)w;  val.pair.y = (float)h;
+	RL_SET_VALUE(blk, 1, val, RXT_PAIR);
+	arg->series = blk;
+	arg->index  = 0;
+	return TRUE;
 }
 
 /***********************************************************************
@@ -1173,7 +1194,8 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 {
 	switch (word) {
 	case W_PUGL_ARG_IMAGE:
-	case W_PUGL_ARG_PART:    return !n->group;
+	case W_PUGL_ARG_PART:
+	case W_PUGL_ARG_NINE_SCALE: return !n->group;
 	case W_PUGL_ARG_IMAGES:  return n->group ? TRUE : FALSE;
 	case W_PUGL_ARG_SIZE:
 	case W_PUGL_ARG_OFFSET:
@@ -1321,21 +1343,15 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		break;
 
 	// A new block each time: [offset size], or none for the whole image.
-	case W_PUGL_ARG_PART: {
-		REBSER *blk;
-		RXIARG  val;
-		if (!im->part_w) { *type = RXT_NONE; break; }
-		blk = (REBSER*)RL_MAKE_BLOCK(2);
-		if (!blk) { *type = RXT_NONE; break; }
-		CLEARS(&val);
-		val.pair.x = (float)im->part_x;  val.pair.y = (float)im->part_y;
-		RL_SET_VALUE(blk, 0, val, RXT_PAIR);
-		val.pair.x = (float)im->part_w;  val.pair.y = (float)im->part_h;
-		RL_SET_VALUE(blk, 1, val, RXT_PAIR);
-		arg->series = blk;
-		arg->index  = 0;
-		*type = RXT_BLOCK;
-		break; }
+	case W_PUGL_ARG_PART:
+		*type = (im->part_w && Box_Block(im->part_x, im->part_y, im->part_w, im->part_h, arg))
+		      ? RXT_BLOCK : RXT_NONE;
+		break;
+
+	case W_PUGL_ARG_NINE_SCALE:
+		*type = (im->nine && Box_Block(im->nine_x, im->nine_y, im->nine_w, im->nine_h, arg))
+		      ? RXT_BLOCK : RXT_NONE;
+		break;
 
 	// 1-based, in drawing order - like a series index.
 	case W_PUGL_ARG_INDEX: {
@@ -1450,6 +1466,22 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		else return PE_BAD_SET_TYPE;
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
+		break; }
+
+	// The middle box, inside its own size as it is now - a middle of zero
+	// width or height is fine: the edges then meet. Kept as it is when the
+	// part or the image changes later; drawn whole while it does not fit.
+	case W_PUGL_ARG_NINE_SCALE: {
+		REBINT box[4], ow, oh;
+		if (*type == RXT_NONE) { im->nine = FALSE; break; }
+		if (*type != RXT_BLOCK) return PE_BAD_SET_TYPE;
+		Pugl_Own_Size(im, &ow, &oh);
+		if (!Read_Box((REBSER*)arg->series, arg->index, ow, oh, 0, box)) return PE_BAD_SET;
+		im->nine   = TRUE;
+		im->nine_x = box[0];
+		im->nine_y = box[1];
+		im->nine_w = box[2];
+		im->nine_h = box[3];
 		break; }
 
 	// Only the part shown: the same texture, other texture coordinates -

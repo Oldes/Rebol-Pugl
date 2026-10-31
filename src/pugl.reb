@@ -137,6 +137,12 @@ typedef struct Pugl_Node_Context {
 	// is the whole image. Its size is the image's own size where `size`
 	// has a zero axis.
 	REBINT  part_x, part_y, part_w, part_h;
+
+	// `nine-scale`: the box of the middle, in its own pixels (its part's).
+	// Outside it the corners keep their size and the edges stretch one
+	// way only. nine 0 is plain scaling.
+	REBCNT  nine;
+	REBINT  nine_x, nine_y, nine_w, nine_h;
 } PUGLNODE;
 }
 
@@ -180,6 +186,7 @@ handles: [
 		"Pugl image handle - an image! shown in a window"
 		;NAME    GET       SET       DESCRIPTION
 		image    image!    image!    "The image shown - kept by reference: draw into it and call `redraw`"
+		nine-scale block!  [block! none!] "Scales it in nine pieces - [offset size] of the middle box, in its own pixels; the corners keep their size and the edges stretch one way only; none (default) scales it whole"
 		part     block!    [block! none!] "The part of the image shown - [offset size] in its pixels, a frame of an atlas; none (default) for all of it. Set, only the first two values are used, so a block of many parts can be walked"
 		offset   pair!     pair!     "Position of its top-left corner in the window - or in its group"
 		size     pair!     pair!     "Size it is drawn at - scaled to it; a zero axis is the image's own, or its part's"

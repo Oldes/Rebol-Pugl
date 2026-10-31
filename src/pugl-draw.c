@@ -149,6 +149,76 @@ static void Quad(float w, float h)
 }
 
 /***********************************************************************
+**  One axis of a nine-scale: where its three pieces start and end, in
+**  its own pixels (src) and as drawn (dst). The two outer pieces keep
+**  their size; drawn smaller than both together, they shrink alike and
+**  the middle is gone.
+***********************************************************************/
+static void Nine_Axis(REBINT own, REBINT at, REBINT mid, REBINT drawn,
+                      float src[4], float dst[4])
+{
+	float lo = (float)at, hi = (float)(own - at - mid);
+
+	if (lo + hi > (float)drawn && lo + hi > 0.0f) {
+		float k = (float)drawn / (lo + hi);
+		lo *= k;
+		hi *= k;
+	}
+	src[0] = 0.0f;  src[1] = (float)at;  src[2] = (float)(at + mid);  src[3] = (float)own;
+	dst[0] = 0.0f;  dst[1] = lo;         dst[2] = (float)drawn - hi;  dst[3] = (float)drawn;
+}
+
+/***********************************************************************
+**  An image's quads, in its own units: one for the whole of it - or of
+**  its part - or nine when it is nine-scaled and the middle box still
+**  fits its own size. Texture coordinates are fractions of the whole
+**  image!; with GL_NEAREST an atlas frame's neighbours do not bleed in
+**  at whole-number scales.
+***********************************************************************/
+static void Image_Quads(const PUGLNODE *im, REBINT iw, REBINT ih)
+{
+	REBINT ow, oh, dw, dh, bx = 0, by = 0;
+	float  sx[4], sy[4], dx[4], dy[4];
+	int    i, j;
+
+	Pugl_Own_Size(im, &ow, &oh);
+	Pugl_Drawn_Size(im, &dw, &dh);
+	if (im->part_w > 0) {
+		if (im->part_x + im->part_w > iw || im->part_y + im->part_h > ih) {
+			ow = iw; oh = ih;   // the image! changed under it: the whole of it
+		} else {
+			bx = im->part_x;
+			by = im->part_y;
+		}
+	}
+
+	if (!im->nine || im->nine_x + im->nine_w > ow || im->nine_y + im->nine_h > oh) {
+		Quad_Of((float)dw, (float)dh,
+		        (float)bx / iw, (float)by / ih,
+		        (float)(bx + ow) / iw, (float)(by + oh) / ih);
+		return;
+	}
+
+	Nine_Axis(ow, im->nine_x, im->nine_w, dw, sx, dx);
+	Nine_Axis(oh, im->nine_y, im->nine_h, dh, sy, dy);
+
+	glBegin(GL_QUADS);
+	for (j = 0; j < 3; j++) {
+		float v0 = (by + sy[j]) / ih, v1 = (by + sy[j + 1]) / ih;
+		if (dy[j + 1] <= dy[j]) continue;
+		for (i = 0; i < 3; i++) {
+			float u0 = (bx + sx[i]) / iw, u1 = (bx + sx[i + 1]) / iw;
+			if (dx[i + 1] <= dx[i]) continue;
+			glTexCoord2f(u0, v0); glVertex2f(dx[i],     dy[j]);
+			glTexCoord2f(u1, v0); glVertex2f(dx[i + 1], dy[j]);
+			glTexCoord2f(u1, v1); glVertex2f(dx[i + 1], dy[j + 1]);
+			glTexCoord2f(u0, v1); glVertex2f(dx[i],     dy[j + 1]);
+		}
+	}
+	glEnd();
+}
+
+/***********************************************************************
 **  A clipping group's box, into the stencil only: `delta` +1 marks it,
 **  -1 takes the mark back. Only where the clips around it already let
 **  through (the stencil is `level`), so marked is inside all of them.
@@ -257,22 +327,7 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 		Set_Blend(b);
 		// All four: the colour is premultiplied, so it fades with the alpha.
 		glColor4f(a, a, a, a);
-		{
-			// Its part only - an atlas frame - or the whole of it. Texture
-			// coordinates are fractions of the image; with GL_NEAREST a
-			// frame's neighbours do not bleed in at whole-number scales.
-			REBINT dw, dh;
-			float  u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
-			Pugl_Drawn_Size(im, &dw, &dh);
-			if (im->part_w > 0
-			 && im->part_x + im->part_w <= iw && im->part_y + im->part_h <= ih) {
-				u0 = (float)im->part_x / (float)iw;
-				v0 = (float)im->part_y / (float)ih;
-				u1 = (float)(im->part_x + im->part_w) / (float)iw;
-				v1 = (float)(im->part_y + im->part_h) / (float)ih;
-			}
-			Quad_Of((float)dw, (float)dh, u0, v0, u1, v1);
-		}
+		Image_Quads(im, iw, ih);
 	}
 }
 
