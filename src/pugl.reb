@@ -9,7 +9,7 @@ REBOL [
 	Exports: [
 		open-window close-window show-window hide-window
 		poll-events do-events redraw add-image remove-image add-group
-		image-at add-text text-size make-font
+		image-at add-text text-size make-font screens
 	]
 	Purpose: {
 		Native top-level windows through the Pugl library.
@@ -39,6 +39,10 @@ REBOL [
 		node, drawn from the font's atlas in one go, its text settable.
 		`make-font` makes the font from an object with `atlas` (an image!)
 		and `glyphs` (a map! of char to [offset size bearing advance]).
+
+		`screens` gives the connected displays, the primary first, and a
+		window's `screen` the one it is on - the same handle for the same
+		display, measured in units like a window's offset.
 	}
 ]
 
@@ -52,6 +56,17 @@ extern REBCNT Handle_PuglImage;
 extern REBCNT Handle_PuglGroup;
 extern REBCNT Handle_PuglText;
 extern REBCNT Handle_PuglFont;
+extern REBCNT Handle_PuglScreen;
+
+// A screen: a display, named by the key its platform finds it by again
+// (see pugl-screen.h) - every read asks the platform.
+#ifndef PUGL_SCREEN_KEY
+#define PUGL_SCREEN_KEY 64
+#endif
+typedef struct Pugl_Screen_Context {
+	REBHOB *hob;
+	char    key[PUGL_SCREEN_KEY];
+} PUGLSCREEN;
 
 // A glyph of a bitmap font: its box in the atlas, where that goes from the
 // pen at the line's top-left (bx, by), and how far the pen then moves.
@@ -281,6 +296,7 @@ handles: [
 		textures integer!  none      "How many textures it holds - one per image! shown, however many image handles show it"
 		cursor   word!     word!     "The pointer's shape over it, where nothing under the pointer has its own: arrow (default), caret, crosshair, hand, no, left-right, up-down, up-left-down-right, up-right-down-left or all-scroll"
 		icon     image!    [image! none!] "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
+		screen   handle!   none      "The screen holding most of it - the same handle `screens` gives for that display; none while it is on none"
 	]
 	image: [
 		"Pugl image handle - an image! shown in a window"
@@ -358,6 +374,17 @@ handles: [
 		atlas        image!    none      "The image its glyphs are drawn from"
 		fallback?    logic!    none      "Whether a character it has no glyph for is drawn as its fallback glyph - or skipped"
 	]
+	screen: [
+		"Pugl screen handle - one display; every read asks the platform again"
+		;NAME    GET       SET   DESCRIPTION
+		name     string!   none  "What the system calls the display"
+		size     pair!     none  "Size of the whole display, in its units"
+		offset   pair!     none  "Top-left corner, in the same space as a window's offset"
+		work-size   pair!  none  "Size of the part windows should use - without the taskbar, the Dock or the menu bar"
+		work-offset pair!  none  "Top-left corner of that part"
+		scale    decimal!  none  "Device pixels per unit - what a window on this screen reports as its own scale, until that is set"
+		primary? logic!    none  "Whether this is the primary screen - the one with the menu bar on macOS"
+	]
 ]
 
 ;; ---------------------------------------------------------------------------
@@ -420,6 +447,9 @@ commands: [
 		glyphs      [block!] "char [offset size bearing advance] ..."
 		line-height [integer!]
 		fallback    [block! none!] "[offset size bearing advance] of the glyph for characters it has none for"
+	]
+	screens: [
+		"Returns a block of the connected screens, the primary one first"
 	]
 ]
 

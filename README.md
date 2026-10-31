@@ -38,6 +38,27 @@ Running it without arguments lists the available eggs (build targets):
 pugl: import %pugl.rebx
 ```
 
+### Screens
+
+`screens` returns the connected displays, primary first; a window's `screen` is
+the one holding most of it - the same handle, so `==` tells whether two are the
+same display.
+
+```rebol
+home: window/screen
+;; centre a window in the usable part of its screen
+window/offset: home/work-offset + (home/work-size - window/size / 2)
+```
+
+A screen is measured in its own units - its pixels divided by its `scale`, the
+scale a window on it reports - so its `offset` is in the space of a window's
+`offset` while the window's scale is the screen's. Every read asks the system
+again; a handle whose display was unplugged reads `none`.
+
+On Linux the screens are the XRandR monitors, named by their connector (`DP-1`)
+after the model when the monitor tells it; the work area comes from the window
+manager (`_NET_WORKAREA`), and the scale is X11's one `Xft.dpi` for all of them.
+
 ## License
 
 * Rebol/Pugl extension: MIT
@@ -120,6 +141,9 @@ Makes a font handle - use `make-font`, which gives these from an object
 * `line-height` `[integer!]`
 * `fallback` `[block! none!]` [offset size bearing advance] of the glyph for characters it has none for
 
+#### `screens`
+Returns a block of the connected screens, the primary one first
+
 
 ## Used handles and its getters / setters
 
@@ -138,6 +162,7 @@ Makes a font handle - use `make-font`, which gives these from an object
 /textures         integer!            none                          "How many textures it holds - one per image! shown, however many image handles show it"
 /cursor           word!               word!                         "The pointer's shape over it, where nothing under the pointer has its own: arrow (default), caret, crosshair, hand, no, left-right, up-down, up-left-down-right, up-right-down-left or all-scroll"
 /icon             image!              [image! none!]                "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
+/screen           handle!             none                          "The screen holding most of it - the same handle `screens` gives for that display; none while it is on none"
 ```
 
 #### __IMAGE__ - Pugl image handle - an image! shown in a window
@@ -222,6 +247,19 @@ Makes a font handle - use `make-font`, which gives these from an object
 /glyphs           integer!            none                          "How many characters it has a glyph for"
 /atlas            image!              none                          "The image its glyphs are drawn from"
 /fallback?        logic!              none                          "Whether a character it has no glyph for is drawn as its fallback glyph - or skipped"
+```
+
+#### __SCREEN__ - Pugl screen handle - one display; every read asks the platform again
+
+```rebol
+;Refinement       Gets                Sets                          Description
+/name             string!             none                          "What the system calls the display"
+/size             pair!               none                          "Size of the whole display, in its units"
+/offset           pair!               none                          "Top-left corner, in the same space as a window's offset"
+/work-size        pair!               none                          "Size of the part windows should use - without the taskbar, the Dock or the menu bar"
+/work-offset      pair!               none                          "Top-left corner of that part"
+/scale            decimal!            none                          "Device pixels per unit - what a window on this screen reports as its own scale, until that is set"
+/primary?         logic!              none                          "Whether this is the primary screen - the one with the menu bar on macOS"
 ```
 
 

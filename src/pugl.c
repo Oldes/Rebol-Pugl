@@ -27,6 +27,7 @@ REBCNT Handle_PuglImage  = 0;
 REBCNT Handle_PuglGroup  = 0;
 REBCNT Handle_PuglText   = 0;
 REBCNT Handle_PuglFont   = 0;
+REBCNT Handle_PuglScreen = 0;
 
 // One world for the whole process - every view belongs to it.
 PuglWorld *Pugl_World = NULL;
@@ -122,6 +123,18 @@ int Pugl_Init(void) {
 
 	Handle_PuglFont = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-FONT"), &spec);
 	if (Handle_PuglFont == 0) return FALSE;
+
+	// A screen names a display by key and asks the platform on every read.
+	// Nothing to set, and nothing native to lock it to.
+	spec.size     = sizeof(PUGLSCREEN);
+	spec.flags    = HANDLE_REQUIRES_HOB_ON_FREE;
+	spec.free     = PuglScreen_free;
+	spec.get_path = PuglScreen_get_path;
+	spec.set_path = NULL;
+	spec.mold     = PuglScreen_mold;
+
+	Handle_PuglScreen = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-SCREEN"), &spec);
+	if (Handle_PuglScreen == 0) return FALSE;
 
 	if (!Pugl_World) {
 		// PUGL_PROGRAM: we are the application - on macOS this sets up

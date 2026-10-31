@@ -13,6 +13,7 @@
 
 #include <pugl/pugl.h>
 #include "pugl-icon.h"
+#include "pugl-screen.h"
 
 #include <math.h>
 
@@ -130,6 +131,10 @@ int PuglImage_mold(REBHOB *hob, REBSER *str);
 int PuglFont_free(void *hndl);
 int PuglFont_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
 int PuglFont_mold(REBHOB *hob, REBSER *str);
+
+int PuglScreen_free(void *hndl);
+int PuglScreen_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
+int PuglScreen_mold(REBHOB *hob, REBSER *str);
 
 /***********************************************************************
 **  Text layout, shared by drawing, measuring and the pointer.

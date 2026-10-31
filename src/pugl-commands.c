@@ -44,6 +44,7 @@ static PUGLWIN* Frm_Window(RXIFRM *frm, REBCNT n)
 }
 
 static void Set_Handle_Arg(RXIARG *arg, REBHOB *hob);
+static REBHOB *Screen_Handle(const char *key);
 static void Update_Cursor(PUGLWIN *win);
 
 // ... and as an image or a group handle (shown or removed).
@@ -1645,6 +1646,19 @@ int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_IMAGE;
 		break; }
 
+	// The same handle `screens` hands out for that display, so
+	// `window/screen == first screens` asks the obvious question.
+	case W_PUGL_ARG_SCREEN: {
+		char    key[PUGL_SCREEN_KEY];
+		REBHOB *scr;
+		if (!Pugl_View_Screen(view, key) || !(scr = Screen_Handle(key))) {
+			*type = RXT_NONE;
+			break;
+		}
+		Set_Handle_Arg(arg, scr);
+		*type = RXT_HANDLE;
+		break; }
+
 	default:
 		return PE_BAD_SELECT;
 	}
@@ -2373,6 +2387,239 @@ int PuglFont_mold(REBHOB *hob, REBSER *str)
 			(unsigned long)(REBUPT)f, (unsigned)f->count, (int)f->line_height);
 	} else {
 		snprintf(text, sizeof(text), "0#%lx released", (unsigned long)(REBUPT)f);
+	}
+	SERIES_TAIL(str) = 0;
+	APPEND_STRING(str, "%s", text);
+	return len;
+}
+
+
+//== screens ==================================================================
+//
+// One handle per display, reused: `screens` and `window/screen` hand back
+// the SAME handle for the same display while anything still holds it, so
+// `==` answers "is this the same screen?" as it does for windows.
+//
+// The table only remembers; it keeps nothing alive. A screen handle nobody
+// holds is collected like any other value, and its free callback takes it
+// out of the table - so a slot never points at a context the collector has
+// reused.
+//
+// Sixteen displays is far beyond anything real. A seventeenth still gets
+// a handle; it is just not shared, so `==` on two reads of it says false.
+//
+// Everything is in the screen's own units - its pixels divided by its
+// scale, which is what a window on it reports - so a window's `offset` and
+// its screen's are in one space, while the window's `scale` is its
+// screen's. (Once a window's scale is set, its own units differ.)
+
+#define SCREEN_CACHE 16
+static REBHOB *Screen_Cache[SCREEN_CACHE];
+
+static REBHOB *Screen_Handle(const char *key)
+{
+	REBHOB     *hob;
+	PUGLSCREEN *scr;
+	REBCNT      n;
+
+	if (!key || !key[0]) return NULL;
+
+	for (n = 0; n < SCREEN_CACHE; n++) {
+		hob = Screen_Cache[n];
+		if (!hob) continue;
+		scr = (PUGLSCREEN*)hob->data;
+		if (IS_USED_HOB(hob) && scr && strncmp(scr->key, key, PUGL_SCREEN_KEY) == 0)
+			return hob;
+	}
+
+	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglScreen);
+	if (!hob) return NULL;
+	scr = (PUGLSCREEN*)hob->data;
+	CLEARS(scr);
+	scr->hob = hob;
+	strncpy(scr->key, key, PUGL_SCREEN_KEY - 1);
+
+	// Making the handle may have collected - and a collected screen handle
+	// empties its own slot - so the free slot is looked for only now.
+	for (n = 0; n < SCREEN_CACHE; n++) {
+		if (!Screen_Cache[n]) { Screen_Cache[n] = hob; break; }
+	}
+	return hob;
+}
+
+
+/***********************************************************************
+**  screens
+**
+**  One handle per connected display, primary first. Asked of the
+**  platform every time, so a display plugged in since the last call is
+**  there and one taken away is not.
+***********************************************************************/
+COMMAND cmd_pugl_screens(RXIFRM *frm, void *ctx)
+{
+	char    keys[SCREEN_CACHE][PUGL_SCREEN_KEY];
+	int     count, n;
+	REBCNT  at = 0;
+	REBSER *blk;
+	RXIARG  val;
+
+	if (!Pugl_World) RETURN_ERROR(ERR_NO_WORLD);
+	count = Pugl_Screen_Keys(Pugl_World, keys, SCREEN_CACHE);
+	if (count > SCREEN_CACHE) count = SCREEN_CACHE;
+	if (count < 0) count = 0;
+
+	blk = (REBSER*)RL_MAKE_BLOCK((REBCNT)count);
+	if (!blk) RETURN_ERROR(ERR_NO_HANDLE);
+
+	// Each handle made below can collect; the block is what keeps the ones
+	// already made alive, so it is protected until it is in the frame.
+	RL_PROTECT_GC(blk, 1);
+	for (n = 0; n < count; n++) {
+		REBHOB *hob = Screen_Handle(keys[n]);
+		if (!hob) continue;
+		Set_Handle_Arg(&val, hob);
+		RL_SET_VALUE(blk, at++, val, RXT_HANDLE);
+	}
+	RL_PROTECT_GC(blk, 0);
+
+	RXA_SERIES(frm, 1) = blk;
+	RXA_INDEX(frm, 1)  = 0;
+	RXA_TYPE(frm, 1)   = RXT_BLOCK;
+	return RXR_VALUE;
+}
+
+
+//== screen handle callbacks ==================================================
+
+int PuglScreen_free(void *hndl)
+{
+	REBHOB     *hob = (REBHOB*)hndl;
+	PUGLSCREEN *scr = hob ? (PUGLSCREEN*)hob->data : NULL;
+	REBCNT      n;
+
+	for (n = 0; n < SCREEN_CACHE; n++) {
+		if (Screen_Cache[n] == hob) Screen_Cache[n] = NULL;
+	}
+	if (scr) CLEARS(scr);
+	if (hob) UNMARK_HOB(hob);
+	return 0;
+}
+
+
+// The screen's geometry in its own units; FALSE once the display is gone.
+static REBOOL Screen_Units(PUGLSCREEN *scr, PuglScreenInfo *info)
+{
+	double k;
+
+	memset(info, 0, sizeof(*info));
+	if (!scr || !Pugl_World || !Pugl_Screen_Info(Pugl_World, scr->key, info)) return FALSE;
+	k = info->scale > 0.0 ? info->scale : 1.0;
+	info->scale = k;
+	info->x  = (int)To_Units(info->x,  k);
+	info->y  = (int)To_Units(info->y,  k);
+	info->w  = (int)To_Units(info->w,  k);
+	info->h  = (int)To_Units(info->h,  k);
+	info->wx = (int)To_Units(info->wx, k);
+	info->wy = (int)To_Units(info->wy, k);
+	info->ww = (int)To_Units(info->ww, k);
+	info->wh = (int)To_Units(info->wh, k);
+	return TRUE;
+}
+
+
+int PuglScreen_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
+{
+	PUGLSCREEN    *scr = (PUGLSCREEN*)hob->data;
+	PuglScreenInfo info;
+
+	word = RL_FIND_WORD(Pugl_arg_words, word);
+
+	// A word this extension does not know is refused, so that `scr/type`
+	// still reaches the core's own answer.
+	switch (word) {
+	case W_PUGL_ARG_NAME:
+	case W_PUGL_ARG_SIZE:
+	case W_PUGL_ARG_OFFSET:
+	case W_PUGL_ARG_WORK_SIZE:
+	case W_PUGL_ARG_WORK_OFFSET:
+	case W_PUGL_ARG_SCALE:
+	case W_PUGL_ARG_PRIMARYQ:
+		break;
+	default:
+		return PE_BAD_SELECT;
+	}
+
+	// A display which has gone answers none for everything, the way a
+	// closed window does - the handle itself stays valid.
+	if (!Screen_Units(scr, &info)) {
+		*type = RXT_NONE;
+		return PE_USE;
+	}
+
+	switch (word) {
+	case W_PUGL_ARG_NAME: {
+		char name[256];
+		if (!Pugl_Screen_Name(Pugl_World, scr->key, name, (int)sizeof(name))) {
+			*type = RXT_NONE;
+			break;
+		}
+		arg->series = RL_DECODE_UTF_STRING((REBYTE*)name, (REBCNT)strlen(name), 8, FALSE, FALSE);
+		if (!arg->series) { *type = RXT_NONE; break; }
+		arg->index = 0;
+		*type = RXT_STRING;
+		break; }
+
+	case W_PUGL_ARG_SIZE:
+		arg->pair.x = (float)info.w;
+		arg->pair.y = (float)info.h;
+		*type = RXT_PAIR;
+		break;
+
+	case W_PUGL_ARG_OFFSET:
+		arg->pair.x = (float)info.x;
+		arg->pair.y = (float)info.y;
+		*type = RXT_PAIR;
+		break;
+
+	case W_PUGL_ARG_WORK_SIZE:
+		arg->pair.x = (float)info.ww;
+		arg->pair.y = (float)info.wh;
+		*type = RXT_PAIR;
+		break;
+
+	case W_PUGL_ARG_WORK_OFFSET:
+		arg->pair.x = (float)info.wx;
+		arg->pair.y = (float)info.wy;
+		*type = RXT_PAIR;
+		break;
+
+	case W_PUGL_ARG_SCALE:
+		arg->dec64 = info.scale;
+		*type = RXT_DECIMAL;
+		break;
+
+	case W_PUGL_ARG_PRIMARYQ:
+		arg->int32a = info.primary ? 1 : 0;
+		*type = RXT_LOGIC;
+		break;
+	}
+	return PE_USE;
+}
+
+
+int PuglScreen_mold(REBHOB *hob, REBSER *str)
+{
+	int            len;
+	char           text[96];
+	PUGLSCREEN    *scr;
+	PuglScreenInfo info;
+
+	if (!str || !hob || !(scr = (PUGLSCREEN*)hob->data)) return 0;
+	if (Screen_Units(scr, &info)) {
+		snprintf(text, sizeof(text), "%dx%d at %dx%d%s", info.w, info.h, info.x, info.y,
+		         info.primary ? " primary" : "");
+	} else {
+		snprintf(text, sizeof(text), "%s", "gone");
 	}
 	SERIES_TAIL(str) = 0;
 	APPEND_STRING(str, "%s", text);

@@ -136,6 +136,10 @@ make-extension: [
 	#if Windows? [ files: [%src/pugl-icon-win.c] ]
 	#if Linux?   [ files: [%src/pugl-icon-x11.c] ]
 	#if macOS?   [ files: [%src/pugl-icon-mac.m] ]
+	;- the screens - pugl has no API for them either
+	#if Windows? [ files: [%src/pugl-screen-win.c] ]
+	#if Linux?   [ files: [%src/pugl-screen-x11.c] ]
+	#if macOS?   [ files: [%src/pugl-screen-mac.m] ]
 ]
 
 ;- pugl backends -------------------------------------------------

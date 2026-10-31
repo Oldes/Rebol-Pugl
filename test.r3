@@ -1037,6 +1037,65 @@ window/icon: pic
 print ["a bigger icon:   " window/icon/size "(expected 256x256)"]
 
 ;;=============================================================================
+print as-yellow "^/== Screens"
+;;=============================================================================
+
+;; One handle per display, the primary first. Every read asks the platform
+;; again, so a handle always describes the display as it is now - and one
+;; whose display has been unplugged reads none for everything.
+all-screens: screens
+print ["screens:         " length? all-screens "(expected at least 1)"]
+foreach scr all-screens [
+	print [
+		" " pad mold scr/name 28
+		"size" pad scr/size 10 "at" pad scr/offset 10
+		"work" pad scr/work-size 10 "at" pad scr/work-offset 10
+		"scale" scr/scale
+		either scr/primary? ["primary"][""]
+	]
+]
+main: first all-screens
+print ["first is primary:" main/primary? "(expected true)"]
+primaries: 0
+foreach scr all-screens [if scr/primary? [primaries: primaries + 1]]
+print ["one primary:     " primaries = 1 "(expected true)"]
+print ["its type:        " main/type "(expected pugl-screen)"]
+print ["molded:          " mold main]
+print ["read-only:       " error? try [main/size: 10x10] "(expected true)"]
+print ["an unknown word: " error? try [main/foo] "(expected true)"]
+
+;; The same display is the same HANDLE, however it was reached - so `==`
+;; asks "is this the same screen?" as it does for windows. (`=` would not:
+;; on handles it compares only the type.)
+print ["asked twice:     " main == first screens "(expected true)"]
+home: window/screen
+on-screen?: false
+foreach scr screens [if scr == home [on-screen?: true]]
+print ["window's screen: " mold home]
+print ["one of them:     " on-screen? "(expected true)"]
+
+;; In the space a window's `offset` uses, measured in the screen's units -
+;; which are the window's while its scale is the screen's.
+in-box?: func [p [pair!] o [pair!] s [pair!]][
+	all [p/x >= o/x  p/y >= o/y  p/x < (o/x + s/x)  p/y < (o/y + s/y)]
+]
+print ["the window on it:" in-box? window/offset home/offset home/size "(expected true)"]
+print ["scales agree:    " window/scale = home/scale "(expected true)"]
+;; The work area - without the taskbar, the Dock, the menu bar or panels -
+;; is inside the screen, and never bigger than it.
+print ["work area inside:" did all [
+	in-box? home/work-offset home/offset home/size
+	home/work-size/x <= home/size/x
+	home/work-size/y <= home/size/y
+] "(expected true)"]
+;; A window's own zoom does not change its screen.
+window/scale: 3
+print ["zoomed, the same:" window/screen == home "(expected true)"]
+print ["screen unzoomed: " home/scale <> 3 "(expected true, unless the screen is 3x)"]
+window/scale: none
+poll-events
+
+;;=============================================================================
 print as-yellow "^/== Events"
 ;;=============================================================================
 
