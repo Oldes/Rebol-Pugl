@@ -127,4 +127,59 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
 int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
 int PuglImage_mold(REBHOB *hob, REBSER *str);
 
+int PuglFont_free(void *hndl);
+int PuglFont_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg);
+int PuglFont_mold(REBHOB *hob, REBSER *str);
+
+/***********************************************************************
+**  Text layout, shared by drawing, measuring and the pointer.
+***********************************************************************/
+// The glyph of a character - or the font's fallback - or NULL to skip it.
+static inline const PUGLGLYPH *Pugl_Glyph_Of(const PUGLFONT *f, u32 c)
+{
+	REBCNT lo = 0, hi = f->count;
+	while (lo < hi) {
+		REBCNT mid = (lo + hi) / 2;
+		if      (f->glyphs[mid].code < c) lo = mid + 1;
+		else if (f->glyphs[mid].code > c) hi = mid;
+		else return &f->glyphs[mid];
+	}
+	return f->has_fallback ? &f->fallback : NULL;
+}
+
+// The width of the line starting at chars[from], up to a newline or the
+// end; `*next` is where the next line starts (past the newline).
+static inline REBINT Pugl_Line_Width(const PUGLFONT *f, const u32 *chars, REBCNT n,
+                                     REBCNT from, REBCNT *next)
+{
+	REBINT w = 0;
+	REBCNT i;
+	for (i = from; i < n && chars[i] != '\n'; i++) {
+		const PUGLGLYPH *g;
+		if (chars[i] == '\r') continue;
+		if ((g = Pugl_Glyph_Of(f, chars[i]))) w += g->advance;
+	}
+	*next = i < n ? i + 1 : n;
+	return w;
+}
+
+// The size of a text: its widest line, by its lines times the line height.
+static inline void Pugl_Text_Size(const PUGLFONT *f, const u32 *chars, REBCNT n,
+                                  REBINT *w, REBINT *h)
+{
+	REBCNT from = 0, next, lines = 0;
+	*w = 0;
+	for (;;) {
+		REBINT lw = Pugl_Line_Width(f, chars, n, from, &next);
+		if (lw > *w) *w = lw;
+		lines++;
+		if (next >= n) break;
+		from = next;
+	}
+	// An empty text is one empty line; one ending in a newline has an empty
+	// last line too.
+	if (n && chars[n - 1] == '\n') lines++;
+	*h = (REBINT)lines * f->line_height;
+}
+
 #endif

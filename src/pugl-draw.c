@@ -448,6 +448,51 @@ static void Set_Blend(REBCNT mode)
 }
 
 /***********************************************************************
+**  A text's glyphs, in its own units - all of them in one go, from the
+**  font's atlas, which is bound. Each line starts where its alignment
+**  puts it within the widest: left at 0, centre half the difference in,
+**  right the whole of it. A glyph with no pixels only moves the pen.
+***********************************************************************/
+static void Text_Quads(const PUGLNODE *t, REBINT iw, REBINT ih)
+{
+	const PUGLFONT *f = (const PUGLFONT*)t->font;
+	REBCNT from = 0, next, i;
+	REBINT y = 0;
+
+	if (!f || !t->nchars) return;
+	glBegin(GL_QUADS);
+	for (;;) {
+		REBINT lw = Pugl_Line_Width(f, t->chars, t->nchars, from, &next);
+		REBINT x  = t->align == W_PUGL_ALIGN_CENTER ? (t->text_w - lw) / 2
+		          : t->align == W_PUGL_ALIGN_RIGHT  ?  t->text_w - lw
+		          : 0;
+		for (i = from; i < next && i < t->nchars; i++) {
+			const PUGLGLYPH *g;
+			u32 c = t->chars[i];
+			if (c == '\n' || c == '\r') continue;
+			if (!(g = Pugl_Glyph_Of(f, c))) continue;
+			if (g->w > 0) {
+				float x0 = (float)(x + g->bx), y0 = (float)(y + g->by);
+				float x1 = x0 + g->w,          y1 = y0 + g->h;
+				float u0 = (g->x + PUGL_TEXEL_INSET) / iw;
+				float v0 = (g->y + PUGL_TEXEL_INSET) / ih;
+				float u1 = (g->x + g->w - PUGL_TEXEL_INSET) / iw;
+				float v1 = (g->y + g->h - PUGL_TEXEL_INSET) / ih;
+				glTexCoord2f(u0, v0); glVertex2f(x0, y0);
+				glTexCoord2f(u1, v0); glVertex2f(x1, y0);
+				glTexCoord2f(u1, v1); glVertex2f(x1, y1);
+				glTexCoord2f(u0, v1); glVertex2f(x0, y1);
+			}
+			x += g->advance;
+		}
+		if (next >= t->nchars) break;
+		from = next;
+		y += f->line_height;
+	}
+	glEnd();
+}
+
+/***********************************************************************
 **  A list of images under `parent` - the transform into window pixels -
 **  at `alpha` opacity, by `blend` where they do not set their own, drawn
 **  where the stencil is `level`: inside every clipping group around it.
@@ -492,6 +537,26 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 			Draw_List(win, (PUGLNODE*)im->children, &m, a, t, b, f, level + 1, win_w, win_h);
 			Stencil_Box(im, &m, level + 1, -1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level, 0xFF);
+			continue;
+		}
+
+		// A text: its font's atlas, shared like any image!'s texture.
+		if (im->is_text) {
+			PUGLFONT *fnt = (PUGLFONT*)im->font;
+			PUGLTEX  *tx;
+			if (!fnt || !fnt->image || !im->slot || im->slot > win->tex_size) continue;
+			img = (REBSER*)fnt->image;
+			iw = (REBINT)IMG_WIDE(img);
+			ih = (REBINT)IMG_HIGH(img);
+			if (iw <= 0 || ih <= 0) continue;
+			tx = &win->tex[im->slot - 1];
+			Upload(tx, img, iw, ih);
+			if (a <= 0.0f) continue;
+			Load_Xform(&m);
+			Set_Blend(b);
+			glColor4f(t[0] * a, t[1] * a, t[2] * a, a);
+			Set_Sampling(&tx->filter, &tx->wrap, f, FALSE);
+			Text_Quads(im, iw, ih);
 			continue;
 		}
 

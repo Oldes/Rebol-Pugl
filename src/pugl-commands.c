@@ -23,6 +23,9 @@ static const REBYTE* ERR_NO_WORLD       = (const REBYTE*)"Pugl world is not init
 static const REBYTE* ERR_BAD_SIZE       = (const REBYTE*)"Size must be between 1x1 and 10000x10000!";
 static const REBYTE* ERR_BAD_IMAGE      = (const REBYTE*)"Empty or invalid image!";
 static const REBYTE* ERR_BAD_PART       = (const REBYTE*)"Part must be [offset size] inside the image!";
+static const REBYTE* ERR_INVALID_FONT   = (const REBYTE*)"Invalid Pugl font handle!";
+static const REBYTE* ERR_BAD_GLYPH      = (const REBYTE*)"A glyph must be char [offset size bearing advance], inside the atlas!";
+static const REBYTE* ERR_BAD_TEXT       = (const REBYTE*)"Failed to read the text!";
 
 // Every open view, so they can all go before the world does.
 static PUGLWIN *Windows_Head = NULL;
@@ -47,11 +50,98 @@ static void Update_Cursor(PUGLWIN *win);
 static PUGLNODE* Frm_Node(RXIFRM *frm, REBCNT n)
 {
 	REBHOB *hob;
-	if (!FRM_IS_HANDLE(n, Handle_PuglImage) && !FRM_IS_HANDLE(n, Handle_PuglGroup))
+	if (!FRM_IS_HANDLE(n, Handle_PuglImage) && !FRM_IS_HANDLE(n, Handle_PuglGroup)
+	 && !FRM_IS_HANDLE(n, Handle_PuglText))
 		return NULL;
 	hob = RXA_HANDLE_CONTEXT(frm, n);
 	if (!hob || !IS_USED_HOB(hob) || !hob->data) return NULL;
 	return (PUGLNODE*)hob->data;
+}
+
+// ... and as a font handle.
+static PUGLFONT* Frm_Font(RXIFRM *frm, REBCNT n)
+{
+	REBHOB *hob;
+	if (!FRM_IS_HANDLE(n, Handle_PuglFont)) return NULL;
+	hob = RXA_HANDLE_CONTEXT(frm, n);
+	if (!hob || !IS_USED_HOB(hob) || !hob->data) return NULL;
+	return ((PUGLFONT*)hob->data)->glyphs ? (PUGLFONT*)hob->data : NULL;
+}
+
+/***********************************************************************
+**  A string! as characters, UTF-32 in C memory - what a text node keeps,
+**  so that drawing never calls into the interpreter. Through UTF-8, the
+**  form the API hands strings over in. *chars is NULL for an empty text.
+***********************************************************************/
+static REBOOL Text_Chars(REBSER *ser, REBCNT index, u32 **chars, REBCNT *count)
+{
+	REBYTE *utf8 = NULL;
+	int     len  = RL_GET_UTF8_STRING(ser, index, (void**)&utf8);
+	u32    *out;
+	REBCNT  n = 0;
+	int     i = 0;
+
+	*chars = NULL;
+	*count = 0;
+	if (len < 0) return FALSE;
+	if (len == 0) return TRUE;
+	out = (u32*)MAKE_MEM((REBCNT)len * sizeof(u32));   // never more chars than bytes
+	if (!out) return FALSE;
+	while (i < len) {
+		REBYTE b = utf8[i];
+		u32    c;
+		int    more;
+		if      (b < 0x80)           { c = b;        more = 0; }
+		else if ((b & 0xE0) == 0xC0) { c = b & 0x1F; more = 1; }
+		else if ((b & 0xF0) == 0xE0) { c = b & 0x0F; more = 2; }
+		else if ((b & 0xF8) == 0xF0) { c = b & 0x07; more = 3; }
+		else { i++; continue; }      // not a lead byte - skipped
+		i++;
+		while (more-- > 0 && i < len && (utf8[i] & 0xC0) == 0x80)
+			c = (c << 6) | (utf8[i++] & 0x3F);
+		out[n++] = c;
+	}
+	*chars = out;
+	*count = n;
+	return TRUE;
+}
+
+// A character as UTF-8, into `out` (up to 4 bytes); returns how many.
+static REBCNT UTF8_Of(u32 c, REBYTE *out)
+{
+	if (c < 0x80)    { out[0] = (REBYTE)c; return 1; }
+	if (c < 0x800)   { out[0] = (REBYTE)(0xC0 | (c >> 6));
+	                   out[1] = (REBYTE)(0x80 | (c & 0x3F)); return 2; }
+	if (c < 0x10000) { out[0] = (REBYTE)(0xE0 | (c >> 12));
+	                   out[1] = (REBYTE)(0x80 | ((c >> 6) & 0x3F));
+	                   out[2] = (REBYTE)(0x80 | (c & 0x3F)); return 3; }
+	out[0] = (REBYTE)(0xF0 | (c >> 18));
+	out[1] = (REBYTE)(0x80 | ((c >> 12) & 0x3F));
+	out[2] = (REBYTE)(0x80 | ((c >> 6) & 0x3F));
+	out[3] = (REBYTE)(0x80 | (c & 0x3F));
+	return 4;
+}
+
+// A text node's characters replaced, and its size measured again.
+static void Set_Text_Chars(PUGLNODE *n, u32 *chars, REBCNT count)
+{
+	if (n->chars) FREE_MEM(n->chars);
+	n->chars  = chars;
+	n->nchars = count;
+	Pugl_Text_Size((PUGLFONT*)n->font, n->chars, n->nchars, &n->text_w, &n->text_h);
+}
+
+// A font is used by one more text node - and locked against the GC while
+// any shows it - or by one less.
+static void Font_Use(PUGLFONT *f, REBINT by)
+{
+	if (!f) return;
+	if (by > 0) f->uses++;
+	else if (f->uses) f->uses--;
+	if (f->hob) {
+		if (f->uses) f->hob->flags |=  HANDLE_CONTEXT_LOCKED;
+		else         f->hob->flags &= ~HANDLE_CONTEXT_LOCKED;
+	}
 }
 
 // What `add-image` and `add-group` add to: an open window, or a group
@@ -320,6 +410,13 @@ static void Release_Node(PUGLNODE *n, PUGLWIN *win)
 	Tex_Drop(win, n->slot);
 	Retire_Texture(win, n->pat_tex);   // a part's pattern copy, if it has one
 	n->pat_tex = 0;
+	if (n->is_text) {
+		Font_Use((PUGLFONT*)n->font, -1);
+		if (n->chars) FREE_MEM(n->chars);
+		n->chars  = NULL;
+		n->nchars = 0;
+		n->font   = NULL;
+	}
 
 	n->win     = NULL;
 	n->parent  = NULL;
@@ -552,9 +649,13 @@ static PUGLNODE *Image_At(PUGLNODE *list, double x, double y)
 			if (hit) top = hit;
 			continue;
 		}
-		if (!n->image) continue;
-		{
+		if (n->is_text) {
+			// The box its text takes.
+			w = n->text_w;
+			h = n->text_h;
+		} else {
 			REBINT dw, dh;
+			if (!n->image) continue;
 			Pugl_Drawn_Size(n, &dw, &dh);
 			w = dw;
 			h = dh;
@@ -1188,6 +1289,197 @@ COMMAND cmd_pugl_image_at(RXIFRM *frm, void *ctx)
 }
 
 
+/***********************************************************************
+**  A glyph's [offset size bearing advance] - the first four values of a
+**  block at its index - inside an atlas of iw by ih. A size of 0x0 has
+**  no pixels (a space): only its advance counts.
+***********************************************************************/
+static REBOOL Read_Glyph(REBSER *blk, REBCNT index, REBINT iw, REBINT ih, PUGLGLYPH *g)
+{
+	RXIARG off, size, bear, adv;
+	int    t;
+
+	if (RL_GET_VALUE(blk, index,     &off)  != RXT_PAIR) return FALSE;
+	if (RL_GET_VALUE(blk, index + 1, &size) != RXT_PAIR) return FALSE;
+	if (RL_GET_VALUE(blk, index + 2, &bear) != RXT_PAIR) return FALSE;
+	t = RL_GET_VALUE(blk, index + 3, &adv);
+	g->x  = (REBINT)off.pair.x;   g->y  = (REBINT)off.pair.y;
+	g->w  = (REBINT)size.pair.x;  g->h  = (REBINT)size.pair.y;
+	g->bx = (REBINT)bear.pair.x;  g->by = (REBINT)bear.pair.y;
+	if      (t == RXT_INTEGER) g->advance = (REBINT)adv.int64;
+	else if (t == RXT_DECIMAL) g->advance = (REBINT)adv.dec64;
+	else return FALSE;
+	if (g->w == 0 || g->h == 0) { g->w = g->h = 0; return TRUE; }
+	return g->x >= 0 && g->y >= 0 && g->w > 0 && g->h > 0
+	    && g->x + g->w <= iw && g->y + g->h <= ih;
+}
+
+static int Glyph_Order(const void *a, const void *b)
+{
+	u32 ca = ((const PUGLGLYPH*)a)->code, cb = ((const PUGLGLYPH*)b)->code;
+	return ca < cb ? -1 : ca > cb;
+}
+
+/***********************************************************************
+**  font-from atlas [image!] glyphs [block!] line-height [integer!]
+**            fallback [block! none!]
+**
+**  Frame: 1 atlas, 2 glyphs, 3 line-height, 4 fallback
+**
+**  `make-font` calls it, with the glyphs of a map! as a block. They are
+**  read once into a C table, sorted by character for a binary search -
+**  a text is drawn and measured from it without the interpreter.
+***********************************************************************/
+COMMAND cmd_pugl_font_from(RXIFRM *frm, void *ctx)
+{
+	REBSER    *img = (REBSER*)RXA_IMAGE(frm, 1);
+	REBSER    *blk = RXA_SERIES(frm, 2);
+	REBCNT     at  = RXA_INDEX(frm, 2);
+	REBINT     iw, ih;
+	REBCNT     n = 0, i;
+	PUGLGLYPH *glyphs;
+	PUGLGLYPH  fallback;
+	REBOOL     has_fallback = FALSE;
+	REBHOB    *hob;
+	REBSER    *slots;
+	PUGLFONT  *f;
+	RXIARG     key, val;
+
+	if (!img || !(iw = (REBINT)IMG_WIDE(img)) || !(ih = (REBINT)IMG_HIGH(img)))
+		RETURN_ERROR(ERR_BAD_IMAGE);
+	if (RXA_INT64(frm, 3) < 1 || RXA_INT64(frm, 3) > 10000) RETURN_ERROR(ERR_BAD_SIZE);
+	if (RXA_TYPE(frm, 4) == RXT_BLOCK) {
+		CLEARS(&fallback);
+		if (!Read_Glyph(RXA_SERIES(frm, 4), RXA_INDEX(frm, 4), iw, ih, &fallback))
+			RETURN_ERROR(ERR_BAD_GLYPH);
+		has_fallback = TRUE;
+	}
+
+	// char [glyph] pairs: as many glyphs as half the values, at most.
+	for (i = at; RL_GET_VALUE(blk, i, &key); i += 2) n++;
+	glyphs = (PUGLGLYPH*)MAKE_MEM((n ? n : 1) * sizeof(PUGLGLYPH));
+	if (!glyphs) RETURN_ERROR(ERR_NO_HANDLE);
+	n = 0;
+	for (i = at; RL_GET_VALUE(blk, i, &key); i += 2) {
+		if (RL_GET_VALUE(blk, i, &key) != RXT_CHAR
+		 || RL_GET_VALUE(blk, i + 1, &val) != RXT_BLOCK
+		 || !Read_Glyph((REBSER*)val.series, val.index, iw, ih, &glyphs[n])) {
+			FREE_MEM(glyphs);
+			RETURN_ERROR(ERR_BAD_GLYPH);
+		}
+		glyphs[n++].code = (u32)key.int32a;
+	}
+	qsort(glyphs, n, sizeof(PUGLGLYPH), Glyph_Order);
+
+	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglFont);
+	if (!hob) { FREE_MEM(glyphs); RETURN_ERROR(ERR_NO_HANDLE); }
+	f = (PUGLFONT*)hob->data;
+	CLEARS(f);
+	f->hob = hob;
+
+	// The atlas, as it came, in the slot the GC marks.
+	slots = (REBSER*)RL_MAKE_BLOCK(1);
+	if (!slots) {
+		FREE_MEM(glyphs);
+		RL_FREE_HANDLE_CONTEXT(hob);
+		RETURN_ERROR(ERR_NO_HANDLE);
+	}
+	hob->series = slots;
+	RL_SET_VALUE(slots, 0, RXA_ARG(frm, 1), RXT_IMAGE);
+
+	f->image        = img;
+	f->glyphs       = glyphs;
+	f->count        = n;
+	f->line_height  = (REBINT)RXA_INT64(frm, 3);
+	f->has_fallback = has_fallback;
+	if (has_fallback) f->fallback = fallback;
+
+	RETURN_HANDLE(hob);
+}
+
+/***********************************************************************
+**  add-text target [handle!] font [handle!] text [string!] offset [pair!]
+**
+**  Frame: 1 target, 2 font, 3 text, 4 offset
+**
+**  One node, its glyphs drawn from the font's atlas - whose texture it
+**  shares with anything else showing the atlas.
+***********************************************************************/
+COMMAND cmd_pugl_add_text(RXIFRM *frm, void *ctx)
+{
+	PUGLNODE *parent;
+	PUGLWIN  *win = Frm_Target(frm, 1, &parent);
+	PUGLFONT *f   = Frm_Font(frm, 2);
+	REBHOB   *hob;
+	REBSER   *slots;
+	PUGLNODE *t;
+	u32      *chars;
+	REBCNT    count;
+
+	if (!win) RETURN_ERROR(ERR_INVALID_TARGET);
+	if (!f)   RETURN_ERROR(ERR_INVALID_FONT);
+	if (!Text_Chars(RXA_SERIES(frm, 3), RXA_INDEX(frm, 3), &chars, &count))
+		RETURN_ERROR(ERR_BAD_TEXT);
+
+	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglText);
+	if (!hob) { if (chars) FREE_MEM(chars); RETURN_ERROR(ERR_NO_HANDLE); }
+	t = (PUGLNODE*)hob->data;
+	CLEARS(t);
+	t->hob = hob;
+
+	// The font's handle, in the slot the GC marks - which keeps it alive
+	// while the text shows it.
+	slots = (REBSER*)RL_MAKE_BLOCK(1);
+	if (!slots) {
+		if (chars) FREE_MEM(chars);
+		RL_FREE_HANDLE_CONTEXT(hob);
+		RETURN_ERROR(ERR_NO_HANDLE);
+	}
+	hob->series = slots;
+	RL_SET_VALUE(slots, 0, RXA_ARG(frm, 2), RXT_HANDLE);
+
+	t->slot = Tex_Use(win, (REBSER*)f->image);
+	if (!t->slot) {
+		if (chars) FREE_MEM(chars);
+		hob->series = NULL;
+		RL_FREE_HANDLE_CONTEXT(hob);
+		RETURN_ERROR(ERR_NO_HANDLE);
+	}
+	t->is_text = TRUE;
+	t->font    = f;
+	t->x       = (REBINT)RXA_PAIR(frm, 4).x;
+	t->y       = (REBINT)RXA_PAIR(frm, 4).y;
+	Set_Text_Chars(t, chars, count);
+	Font_Use(f, +1);
+	Link_Node(win, parent, t);
+	Window_Changed(win);
+
+	RETURN_HANDLE(hob);
+}
+
+/***********************************************************************
+**  text-size font [handle!] text [string!]
+***********************************************************************/
+COMMAND cmd_pugl_text_size(RXIFRM *frm, void *ctx)
+{
+	PUGLFONT *f = Frm_Font(frm, 1);
+	u32      *chars;
+	REBCNT    count;
+	REBINT    w, h;
+
+	if (!f) RETURN_ERROR(ERR_INVALID_FONT);
+	if (!Text_Chars(RXA_SERIES(frm, 2), RXA_INDEX(frm, 2), &chars, &count))
+		RETURN_ERROR(ERR_BAD_TEXT);
+	Pugl_Text_Size(f, chars, count, &w, &h);
+	if (chars) FREE_MEM(chars);
+
+	RXA_PAIR(frm, 1).x = (float)w;
+	RXA_PAIR(frm, 1).y = (float)h;
+	RXA_TYPE(frm, 1)   = RXT_PAIR;
+	return RXR_VALUE;
+}
+
+
 // Removing an image which is no longer shown is not an error - its window
 // may have been closed, or its group removed, which removes everything in
 // it. A group goes with all that is in it.
@@ -1475,8 +1767,11 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	case W_PUGL_ARG_IMAGE:
 	case W_PUGL_ARG_PART:
 	case W_PUGL_ARG_FILL:
-	case W_PUGL_ARG_NINE_SCALE: return !n->group;
+	case W_PUGL_ARG_NINE_SCALE: return !n->group && !n->is_text;
 	case W_PUGL_ARG_IMAGES:  return n->group ? TRUE : FALSE;
+	case W_PUGL_ARG_TEXT:
+	case W_PUGL_ARG_FONT:
+	case W_PUGL_ARG_ALIGN:   return n->is_text ? TRUE : FALSE;
 	case W_PUGL_ARG_SIZE:
 	case W_PUGL_ARG_OFFSET:
 	case W_PUGL_ARG_VISIBLEQ:
@@ -1547,9 +1842,15 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_PAIR;
 		break;
 
-	// What it is drawn at, a zero axis resolved to the image's own - and
-	// for a group what it clips to, as set.
+	// What it is drawn at, a zero axis resolved to the image's own - for a
+	// group what it clips to, as set - and for a text what it takes.
 	case W_PUGL_ARG_SIZE:
+		if (im->is_text) {
+			arg->pair.x = (float)im->text_w;
+			arg->pair.y = (float)im->text_h;
+			*type = RXT_PAIR;
+			break;
+		}
 		if (im->group) {
 			arg->pair.x = (float)im->w;
 			arg->pair.y = (float)im->h;
@@ -1623,6 +1924,30 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 	case W_PUGL_ARG_OPACITY:
 		arg->dec64 = im->opacity;
 		*type = RXT_PERCENT;
+		break;
+
+	// A new string each time, from its characters - through UTF-8 and
+	// RL_DECODE_UTF_STRING, as the window's title is.
+	case W_PUGL_ARG_TEXT: {
+		REBYTE *utf8 = (REBYTE*)MAKE_MEM(im->nchars * 4 + 1);
+		REBCNT  i, n = 0;
+		if (!utf8) { *type = RXT_NONE; break; }
+		for (i = 0; i < im->nchars; i++) n += UTF8_Of(im->chars[i], utf8 + n);
+		arg->series = RL_DECODE_UTF_STRING(utf8, n, 8, FALSE, FALSE);
+		FREE_MEM(utf8);
+		if (!arg->series) { *type = RXT_NONE; break; }
+		arg->index = 0;
+		*type = RXT_STRING;
+		break; }
+
+	case W_PUGL_ARG_FONT:
+		Set_Handle_Arg(arg, ((PUGLFONT*)im->font)->hob);
+		*type = RXT_HANDLE;
+		break;
+
+	case W_PUGL_ARG_ALIGN:
+		arg->int32a = (int)Pugl_align_words[im->align ? im->align : W_PUGL_ALIGN_LEFT];
+		*type = RXT_WORD;
 		break;
 
 	// A new block each time: [offset size], or none for the whole image.
@@ -1726,8 +2051,10 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		break;
 
 	// A zero axis is the image's own, so `0x0` undoes a scaling - and for
-	// a group it is not clipped, so `0x0` stops clipping.
+	// a group it is not clipped, so `0x0` stops clipping. A text's is what
+	// its text takes, and is not set.
 	case W_PUGL_ARG_SIZE:
+		if (im->is_text) return PE_BAD_SET;
 		if (*type != RXT_PAIR) return PE_BAD_SET_TYPE;
 		if (arg->pair.x < 0 || arg->pair.y < 0
 		 || arg->pair.x > 10000 || arg->pair.y > 10000) return PE_BAD_RANGE;
@@ -1831,6 +2158,43 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		im->nine_h = box[3];
 		break; }
 
+	// A new text: its characters, measured again - the same texture.
+	case W_PUGL_ARG_TEXT: {
+		u32   *chars;
+		REBCNT count;
+		if (*type != RXT_STRING) return PE_BAD_SET_TYPE;
+		if (!Text_Chars((REBSER*)arg->series, arg->index, &chars, &count)) return PE_BAD_SET;
+		Set_Text_Chars(im, chars, count);
+		break; }
+
+	// Another font: its atlas's texture, and the text measured in it.
+	case W_PUGL_ARG_FONT: {
+		PUGLWIN  *win = (PUGLWIN*)im->win;
+		PUGLFONT *f;
+		REBCNT    slot;
+		if (*type != RXT_HANDLE) return PE_BAD_SET_TYPE;
+		if (arg->handle.type != Handle_PuglFont || !IS_USED_HOB(arg->handle.hob)) return PE_BAD_SET;
+		f = (PUGLFONT*)arg->handle.hob->data;
+		if (!f || !f->glyphs) return PE_BAD_SET;
+		slot = Tex_Use(win, (REBSER*)f->image);
+		if (!slot) return PE_BAD_SET;
+		Tex_Drop(win, im->slot);
+		im->slot = slot;
+		Font_Use(f, +1);
+		Font_Use((PUGLFONT*)im->font, -1);
+		im->font = f;
+		RL_SET_VALUE(hob->series, 0, *arg, RXT_HANDLE);   // the font handle, for the GC
+		Pugl_Text_Size(f, im->chars, im->nchars, &im->text_w, &im->text_h);
+		break; }
+
+	case W_PUGL_ARG_ALIGN: {
+		REBCNT mode;
+		if (*type != RXT_WORD) return PE_BAD_SET_TYPE;
+		mode = RL_FIND_WORD(Pugl_align_words, (REBCNT)arg->int32a);
+		if (!mode) return PE_BAD_SET;
+		im->align = mode;
+		break; }
+
 	// Only the part shown: the same texture, other texture coordinates -
 	// stepping it is how a sprite is animated, at no upload.
 	case W_PUGL_ARG_PART: {
@@ -1915,6 +2279,10 @@ int PuglImage_mold(REBHOB *hob, REBSER *str)
 			snprintf(text, sizeof(text), "0#%lx %u at %dx%d",
 				(unsigned long)(REBUPT)im, (unsigned)count, (int)im->x, (int)im->y);
 		}
+	} else if (im->win && im->is_text) {
+		snprintf(text, sizeof(text), "0#%lx %u chars %dx%d at %dx%d",
+			(unsigned long)(REBUPT)im, (unsigned)im->nchars,
+			(int)im->text_w, (int)im->text_h, (int)im->x, (int)im->y);
 	} else if (im->win && im->image) {
 		REBINT dw, dh;
 		Pugl_Drawn_Size(im, &dw, &dh);
@@ -1924,6 +2292,88 @@ int PuglImage_mold(REBHOB *hob, REBSER *str)
 		snprintf(text, sizeof(text), "0#%lx removed", (unsigned long)(REBUPT)im);
 	}
 
+	SERIES_TAIL(str) = 0;
+	APPEND_STRING(str, "%s", text);
+	return len;
+}
+
+
+//== font handle callbacks ====================================================
+
+// A font in use is locked against the GC - by the texts showing it - so
+// this is reached once none does, or through an explicit `release`.
+int PuglFont_free(void *hndl)
+{
+	REBHOB   *hob = (REBHOB*)hndl;
+	PUGLFONT *f;
+
+	if (!hob) return 0;
+	f = (PUGLFONT*)hob->data;
+	if (f) {
+		if (f->glyphs) FREE_MEM(f->glyphs);
+		CLEARS(f);
+	}
+	UNMARK_HOB(hob);
+	return 0;
+}
+
+
+int PuglFont_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
+{
+	PUGLFONT *f = (PUGLFONT*)hob->data;
+	RXIARG    val;
+
+	word = RL_FIND_WORD(Pugl_arg_words, word);
+	if (!f || !f->glyphs) {
+		if (!word) return PE_BAD_SELECT;
+		*type = RXT_NONE;
+		return PE_USE;
+	}
+	switch (word) {
+	case W_PUGL_ARG_LINE_HEIGHT:
+		arg->int64 = f->line_height;
+		*type = RXT_INTEGER;
+		break;
+
+	case W_PUGL_ARG_GLYPHS:
+		arg->int64 = f->count;
+		*type = RXT_INTEGER;
+		break;
+
+	case W_PUGL_ARG_ATLAS:
+		if (!hob->series || RL_GET_VALUE(hob->series, 0, &val) != RXT_IMAGE) {
+			*type = RXT_NONE;
+			break;
+		}
+		Set_Image_Arg(arg, (REBSER*)val.image);
+		*type = RXT_IMAGE;
+		break;
+
+	case W_PUGL_ARG_FALLBACKQ:
+		arg->int32a = f->has_fallback ? 1 : 0;
+		*type = RXT_LOGIC;
+		break;
+
+	default:
+		return PE_BAD_SELECT;
+	}
+	return PE_USE;
+}
+
+
+int PuglFont_mold(REBHOB *hob, REBSER *str)
+{
+	int       len;
+	char      text[64];
+	PUGLFONT *f;
+
+	if (!str || !hob || !(f = (PUGLFONT*)hob->data)) return 0;
+	if (f->glyphs) {
+		snprintf(text, sizeof(text), "0#%lx %u glyphs %d high",
+			(unsigned long)(REBUPT)f, (unsigned)f->count, (int)f->line_height);
+	} else {
+		snprintf(text, sizeof(text), "0#%lx released", (unsigned long)(REBUPT)f);
+	}
 	SERIES_TAIL(str) = 0;
 	APPEND_STRING(str, "%s", text);
 	return len;

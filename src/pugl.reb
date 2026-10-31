@@ -9,7 +9,7 @@ REBOL [
 	Exports: [
 		open-window close-window show-window hide-window
 		poll-events do-events redraw add-image remove-image add-group
-		image-at
+		image-at add-text text-size make-font
 	]
 	Purpose: {
 		Native top-level windows through the Pugl library.
@@ -34,6 +34,11 @@ REBOL [
 		Images and groups can be turned, scaled and faded - `rotation`,
 		`scale`, `pivot`, `opacity` - and a group does it to all in it. The
 		pointer finds them where they are drawn, clipping included.
+
+		`add-text` shows a line - or lines - of text in a bitmap font: one
+		node, drawn from the font's atlas in one go, its text settable.
+		`make-font` makes the font from an object with `atlas` (an image!)
+		and `glyphs` (a map! of char to [offset size bearing advance]).
 	}
 ]
 
@@ -45,6 +50,30 @@ c-header: {
 extern REBCNT Handle_PuglWindow;
 extern REBCNT Handle_PuglImage;
 extern REBCNT Handle_PuglGroup;
+extern REBCNT Handle_PuglText;
+extern REBCNT Handle_PuglFont;
+
+// A glyph of a bitmap font: its box in the atlas, where that goes from the
+// pen at the line's top-left (bx, by), and how far the pen then moves.
+typedef struct Pugl_Glyph {
+	u32     code;     // its character
+	REBINT  x, y, w, h;
+	REBINT  bx, by;
+	REBINT  advance;
+} PUGLGLYPH;
+
+// A bitmap font: an atlas image! and its glyphs, sorted by character for
+// a binary search. The atlas is also in hob->series, for the GC.
+typedef struct Pugl_Font_Context {
+	REBHOB    *hob;
+	void      *image;        // the atlas image! series
+	PUGLGLYPH *glyphs;
+	REBCNT     count;
+	PUGLGLYPH  fallback;     // drawn for a character it has no glyph for
+	REBCNT     has_fallback; // ... when there is one; else such are skipped
+	REBINT     line_height;
+	REBCNT     uses;         // text nodes showing it - locked while any are
+} PUGLFONT;
 
 // The device which runs puglUpdate() from the host's WAIT.
 extern REBDEV Dev_Pugl;
@@ -174,6 +203,15 @@ typedef struct Pugl_Node_Context {
 	void   *pat_image;    // the image! it was copied from
 	REBINT  pat_x, pat_y, pat_w, pat_h;  // the part it holds
 	REBCNT  pat_filter;   // W_PUGL_FILTER_* it is set to now
+
+	// A text node: the characters of its text (C memory, UTF-32) in a font
+	// (PUGLFONT*, whose handle is in hob->series), and the size they take.
+	REBCNT  is_text;
+	void   *font;
+	u32    *chars;
+	REBCNT  nchars;
+	REBINT  text_w, text_h;
+	REBCNT  align;        // W_PUGL_ALIGN_*, 0 for left
 } PUGLNODE;
 }
 
@@ -212,6 +250,12 @@ words: [
 		up-left-down-right  ;; diagonal resize
 		up-right-down-left  ;; the other diagonal
 		all-scroll          ;; move or pan in any direction
+	]
+	;; How the lines of a text line up.
+	align: [
+		left
+		center
+		right
 	]
 	;; What `index` takes besides a number.
 	place: [
@@ -283,6 +327,37 @@ handles: [
 		tint     tuple!    [tuple! none!] "A colour all in it is multiplied by, on top of their own tint - a fourth value is alpha; none (default) for none"
 		index    integer!  [integer! word!] "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it, with all in it"
 	]
+	text: [
+		"Pugl text handle - lines of text in a bitmap font, one node drawn from the font's atlas"
+		;NAME    GET       SET       DESCRIPTION
+		text     string!   string!   "The text shown - a newline starts the next line"
+		font     handle!   handle!   "The font it is drawn in, from `make-font`"
+		align    word!     word!     "How its lines line up: left (default), center or right - within the widest"
+		size     pair!     none      "The size its text takes: the widest line, by the lines times the line height"
+		offset   pair!     pair!     "Position of its top-left in the window - or in its group"
+		visible? logic!    logic!    "Whether it is drawn"
+		track?   logic!    logic!    "Whether it reports the pointer itself, as an image does"
+		hover?   logic!    none      "Whether the pointer is over it"
+		window   handle!   none      "The window it is shown in; none once removed"
+		parent   handle!   none      "The group it is in; none at the window's top level"
+		rotation decimal!  [decimal! integer!] "Degrees it is turned around its pivot, clockwise"
+		scale    [decimal! pair!] [decimal! integer! pair!] "Scale around its pivot - 2 for twice as big, crisp with nearest"
+		pivot    pair!     pair!     "Point it is turned and scaled around"
+		opacity  percent!  [percent! decimal! integer!] "How opaque it is"
+		blend    word!     [word! none!] "How it is drawn over what is below; none for its group's"
+		filter   word!     [word! none!] "How its glyphs are sampled when not 1:1; none for its group's"
+		cursor   word!     [word! none!] "The pointer's shape over it; none for its group's"
+		tint     tuple!    [tuple! none!] "Its colour - the glyphs are white; none for white"
+		index    integer!  [integer! word!] "Its place in its window's or group's list"
+	]
+	font: [
+		"Pugl font handle - a bitmap font for `add-text`"
+		;NAME        GET       SET       DESCRIPTION
+		line-height  integer!  none      "Height of a line of text, in units"
+		glyphs       integer!  none      "How many characters it has a glyph for"
+		atlas        image!    none      "The image its glyphs are drawn from"
+		fallback?    logic!    none      "Whether a character it has no glyph for is drawn as its fallback glyph - or skipped"
+	]
 ]
 
 ;; ---------------------------------------------------------------------------
@@ -327,11 +402,43 @@ commands: [
 		window [handle!]
 		point  [pair!] "In the window, as an event's offset"
 	]
+	add-text: [
+		"Shows text in a bitmap font in a window or a group, and returns its handle"
+		target [handle!] "A window, or a group"
+		font   [handle!] "From `make-font`"
+		text   [string!] "A newline starts the next line"
+		offset [pair!]   "Position of its top-left"
+	]
+	text-size: [
+		"The size a text takes in a font: the widest line, by the lines times the line height"
+		font [handle!]
+		text [string!]
+	]
+	font-from: [
+		"Makes a font handle - use `make-font`, which gives these from an object"
+		atlas       [image!]
+		glyphs      [block!] "char [offset size bearing advance] ..."
+		line-height [integer!]
+		fallback    [block! none!] "[offset size bearing advance] of the glyph for characters it has none for"
+	]
 ]
 
 ;; ---------------------------------------------------------------------------
 ;; Module body.
 mezzanine: [
+	make-font: function [
+		"Makes a bitmap font for `add-text`, from an object such as a font file returns"
+		font [object!] {With `atlas` (an image!) and `glyphs` (a map! or block of char [offset size bearing advance]); optionally `line-height` (else `size`) and `fallback` - a glyph block, a char whose glyph to use, or none to skip characters it has no glyph for}
+	][
+		fallback: select font 'fallback
+		if char? fallback [fallback: select/case font/glyphs fallback]
+		font-from
+			font/atlas
+			to block! font/glyphs
+			any [select font 'line-height  select font 'size]
+			fallback
+	]
+
 	do-events: function [
 		"Pumps window events until the given window is closed"
 		window  [handle!]

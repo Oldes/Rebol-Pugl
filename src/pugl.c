@@ -25,6 +25,8 @@ static char *init_block = PUGL_EXT_INIT_CODE;
 REBCNT Handle_PuglWindow = 0;
 REBCNT Handle_PuglImage  = 0;
 REBCNT Handle_PuglGroup  = 0;
+REBCNT Handle_PuglText   = 0;
+REBCNT Handle_PuglFont   = 0;
 
 // One world for the whole process - every view belongs to it.
 PuglWorld *Pugl_World = NULL;
@@ -106,6 +108,20 @@ int Pugl_Init(void) {
 	// it apart - and the same callbacks, which look at what it is.
 	Handle_PuglGroup = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-GROUP"), &spec);
 	if (Handle_PuglGroup == 0) return FALSE;
+
+	// A text is a node too - the same context and callbacks.
+	Handle_PuglText = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-TEXT"), &spec);
+	if (Handle_PuglText == 0) return FALSE;
+
+	spec.size     = sizeof(PUGLFONT);
+	spec.flags    = HANDLE_REQUIRES_HOB_ON_FREE;
+	spec.free     = PuglFont_free;
+	spec.get_path = PuglFont_get_path;
+	spec.set_path = NULL;
+	spec.mold     = PuglFont_mold;
+
+	Handle_PuglFont = RL_REGISTER_HANDLE_SPEC(cb_cast("PUGL-FONT"), &spec);
+	if (Handle_PuglFont == 0) return FALSE;
 
 	if (!Pugl_World) {
 		// PUGL_PROGRAM: we are the application - on macOS this sets up

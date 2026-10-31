@@ -101,6 +101,25 @@ The topmost visible image at a point of the window, or none - where it is drawn,
 * `window` `[handle!]`
 * `point` `[pair!]` In the window, as an event's offset
 
+#### `add-text` `:target` `:font` `:text` `:offset`
+Shows text in a bitmap font in a window or a group, and returns its handle
+* `target` `[handle!]` A window, or a group
+* `font` `[handle!]` From `make-font`
+* `text` `[string!]` A newline starts the next line
+* `offset` `[pair!]` Position of its top-left
+
+#### `text-size` `:font` `:text`
+The size a text takes in a font: the widest line, by the lines times the line height
+* `font` `[handle!]`
+* `text` `[string!]`
+
+#### `font-from` `:atlas` `:glyphs` `:line-height` `:fallback`
+Makes a font handle - use `make-font`, which gives these from an object
+* `atlas` `[image!]`
+* `glyphs` `[block!]` char [offset size bearing advance] ...
+* `line-height` `[integer!]`
+* `fallback` `[block! none!]` [offset size bearing advance] of the glyph for characters it has none for
+
 
 ## Used handles and its getters / setters
 
@@ -170,9 +189,57 @@ The topmost visible image at a point of the window, or none - where it is drawn,
 /index            integer!            [integer! word!]              "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it, with all in it"
 ```
 
+#### __TEXT__ - Pugl text handle - lines of text in a bitmap font, one node drawn from the font's atlas
+
+```rebol
+;Refinement       Gets                Sets                          Description
+/text             string!             string!                       "The text shown - a newline starts the next line"
+/font             handle!             handle!                       "The font it is drawn in, from `make-font`"
+/align            word!               word!                         "How its lines line up: left (default), center or right - within the widest"
+/size             pair!               none                          "The size its text takes: the widest line, by the lines times the line height"
+/offset           pair!               pair!                         "Position of its top-left in the window - or in its group"
+/visible?         logic!              logic!                        "Whether it is drawn"
+/track?           logic!              logic!                        "Whether it reports the pointer itself, as an image does"
+/hover?           logic!              none                          "Whether the pointer is over it"
+/window           handle!             none                          "The window it is shown in; none once removed"
+/parent           handle!             none                          "The group it is in; none at the window's top level"
+/rotation         decimal!            [decimal! integer!]           "Degrees it is turned around its pivot, clockwise"
+/scale            [decimal! pair!]    [decimal! integer! pair!]     "Scale around its pivot - 2 for twice as big, crisp with nearest"
+/pivot            pair!               pair!                         "Point it is turned and scaled around"
+/opacity          percent!            [percent! decimal! integer!]  "How opaque it is"
+/blend            word!               [word! none!]                 "How it is drawn over what is below; none for its group's"
+/filter           word!               [word! none!]                 "How its glyphs are sampled when not 1:1; none for its group's"
+/cursor           word!               [word! none!]                 "The pointer's shape over it; none for its group's"
+/tint             tuple!              [tuple! none!]                "Its colour - the glyphs are white; none for white"
+/index            integer!            [integer! word!]              "Its place in its window's or group's list"
+```
+
+#### __FONT__ - Pugl font handle - a bitmap font for `add-text`
+
+```rebol
+;Refinement       Gets                Sets                          Description
+/line-height      integer!            none                          "Height of a line of text, in units"
+/glyphs           integer!            none                          "How many characters it has a glyph for"
+/atlas            image!              none                          "The image its glyphs are drawn from"
+/fallback?        logic!              none                          "Whether a character it has no glyph for is drawn as its fallback glyph - or skipped"
+```
+
 
 ## Other extension values:
 ```rebol
+make-font: function [
+	"Makes a bitmap font for `add-text`, from an object such as a font file returns"
+	font [object!] {With `atlas` (an image!) and `glyphs` (a map! or block of char [offset size bearing advance]); optionally `line-height` (else `size`) and `fallback` - a glyph block, a char whose glyph to use, or none to skip characters it has no glyph for}
+][
+	fallback: select font 'fallback
+	if char? fallback [fallback: select/case font/glyphs fallback]
+	font-from
+		font/atlas
+		to block! font/glyphs
+		any [select font 'line-height  select font 'size]
+		fallback
+]
+
 do-events: function [
 	"Pumps window events until the given window is closed"
 	window  [handle!]
