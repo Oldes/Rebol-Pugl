@@ -80,12 +80,13 @@ static REBOOL In_Chain(PUGLNODE *from, PUGLNODE *n)
 	return FALSE;
 }
 
-// Every image in a list, groups included, to be uploaded again.
-static void Mark_Dirty(PUGLNODE *list)
+// Every image in a list, groups included, to be uploaded again - each
+// shared texture once, however many of them show it.
+static void Mark_Dirty(PUGLWIN *win, PUGLNODE *list)
 {
 	for (; list; list = (PUGLNODE*)list->next) {
-		if (list->group) Mark_Dirty((PUGLNODE*)list->children);
-		else list->dirty = TRUE;
+		if (list->group) Mark_Dirty(win, (PUGLNODE*)list->children);
+		else if (list->slot && list->slot <= win->tex_size) win->tex[list->slot - 1].dirty = TRUE;
 	}
 }
 
@@ -207,6 +208,58 @@ static void Retire_Texture(PUGLWIN *win, REBCNT tex)
 }
 
 /***********************************************************************
+**  The texture slot of an image! in a window, shared by every handle
+**  showing it: found, or a free one taken - the slots grow when there is
+**  none. 0 if there is no memory for it.
+***********************************************************************/
+static REBCNT Tex_Use(PUGLWIN *win, REBSER *img)
+{
+	REBCNT n, free_slot = 0;
+
+	for (n = 0; n < win->tex_size; n++) {
+		PUGLTEX *t = &win->tex[n];
+		if (t->refs && t->image == img) { t->refs++; return n + 1; }
+		if (!t->refs && !free_slot) free_slot = n + 1;
+	}
+	if (!free_slot) {
+		REBCNT   size  = win->tex_size ? win->tex_size * 2 : 8;
+		PUGLTEX *grown = (PUGLTEX*)MAKE_MEM(size * sizeof(PUGLTEX));
+		if (!grown) return 0;
+		memset(grown, 0, size * sizeof(PUGLTEX));
+		if (win->tex) {
+			COPY_MEM(grown, win->tex, win->tex_size * sizeof(PUGLTEX));
+			FREE_MEM(win->tex);
+		}
+		free_slot    = win->tex_size + 1;
+		win->tex     = grown;
+		win->tex_size = size;
+	}
+	win->tex[free_slot - 1].image   = img;
+	win->tex[free_slot - 1].texture = 0;
+	win->tex[free_slot - 1].refs    = 1;
+	win->tex[free_slot - 1].dirty   = TRUE;
+	return free_slot;
+}
+
+// A handle lets go of its slot; the last one retires the texture.
+static void Tex_Drop(PUGLWIN *win, REBCNT slot)
+{
+	PUGLTEX *t;
+	if (!slot || slot > win->tex_size) return;
+	t = &win->tex[slot - 1];
+	if (!t->refs || --t->refs) return;
+	Retire_Texture(win, t->texture);
+	CLEARS(t);
+}
+
+// The slot of an image handle, or NULL.
+static PUGLTEX *Tex_Of(PUGLWIN *win, PUGLNODE *n)
+{
+	if (!n->slot || n->slot > win->tex_size) return NULL;
+	return &win->tex[n->slot - 1];
+}
+
+/***********************************************************************
 **  A node already out of its list - and, for a group, all that is in it.
 **  The handles stay, and report none for everything from then on; they
 **  let go of their image! and of the GC lock they held while shown.
@@ -218,13 +271,13 @@ static void Release_Node(PUGLNODE *n, PUGLWIN *win)
 		n->children = c->next;
 		Release_Node(c, win);
 	}
-	Retire_Texture(win, n->texture);
+	Tex_Drop(win, n->slot);
 
 	n->win     = NULL;
 	n->parent  = NULL;
 	n->next    = NULL;
 	n->image   = NULL;
-	n->texture = 0;
+	n->slot    = 0;
 	if (n->hob) {
 		n->hob->series = NULL;
 		n->hob->flags &= ~HANDLE_CONTEXT_LOCKED;
@@ -322,6 +375,9 @@ static void Close_Window(PUGLWIN *pv)
 	// ones retired earlier is only memory now.
 	pv->hover = NULL;
 	while (pv->images) Detach_Node((PUGLNODE*)pv->images);
+	if (pv->tex) FREE_MEM(pv->tex);
+	pv->tex = NULL;
+	pv->tex_size = 0;
 	if (pv->dead) FREE_MEM(pv->dead);
 	pv->dead = NULL;
 	pv->dead_count = pv->dead_size = 0;
@@ -728,13 +784,15 @@ COMMAND cmd_pugl_redraw(RXIFRM *frm, void *ctx)
 
 	if (n) {
 		if (!n->win) RETURN_ERROR(ERR_INVALID_IMAGE);
-		if (n->group) Mark_Dirty((PUGLNODE*)n->children);
-		else n->dirty = TRUE;
 		win = (PUGLWIN*)n->win;
+		// An image's texture is its image!'s, so every other handle showing
+		// that image! is shown again too - they show the same pixels.
+		if (n->group) Mark_Dirty(win, (PUGLNODE*)n->children);
+		else if (Tex_Of(win, n)) Tex_Of(win, n)->dirty = TRUE;
 	} else {
 		win = Frm_Window(frm, 1);
 		if (!win || !win->view) RETURN_ERROR(ERR_INVALID_HANDLE);
-		Mark_Dirty((PUGLNODE*)win->images);
+		Mark_Dirty(win, (PUGLNODE*)win->images);
 	}
 	Window_Changed(win);
 	puglUpdate(Pugl_World, 0.0);
@@ -822,12 +880,17 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 	hob->series = slots;
 	RL_SET_VALUE(slots, SLOT_IMAGE, RXA_ARG(frm, 2), RXT_IMAGE);
 
+	im->slot = Tex_Use(win, img);
+	if (!im->slot) {
+		hob->series = NULL;
+		RL_FREE_HANDLE_CONTEXT(hob);
+		RETURN_ERROR(ERR_NO_HANDLE);
+	}
 	im->image   = img;
 	im->x       = (REBINT)RXA_PAIR(frm, 3).x;
 	im->y       = (REBINT)RXA_PAIR(frm, 3).y;
 	im->w       = w;
 	im->h       = h;
-	im->dirty   = TRUE;
 	Link_Node(win, parent, im);
 	Window_Changed(win);
 
@@ -966,6 +1029,13 @@ int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		arg->int32a = view ? 1 : 0;
 		*type = RXT_LOGIC;
 		break;
+
+	case W_PUGL_ARG_TEXTURES: {
+		REBCNT n, count = 0;
+		for (n = 0; n < pv->tex_size; n++) if (pv->tex[n].refs) count++;
+		arg->int64 = count;
+		*type = RXT_INTEGER;
+		break; }
 
 	// A new block each time, in drawing order - its top level only.
 	case W_PUGL_ARG_IMAGES:
@@ -1242,16 +1312,24 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 	if (!Node_Has(im, word)) return PE_BAD_SET;
 
 	switch (word) {
-	// Swapping the image is swapping the reference the GC marks; the
-	// texture is uploaded again at the next draw.
+	// Swapping the image is swapping the reference the GC marks, and the
+	// texture slot: the new image!'s - shared if another handle shows it -
+	// taken before the old one is let go, so the same image! set again
+	// keeps its texture. It is uploaded again at the next draw either way.
 	case W_PUGL_ARG_IMAGE: {
-		REBSER *img;
+		REBSER  *img;
+		PUGLWIN *win = (PUGLWIN*)im->win;
+		REBCNT   slot;
 		if (*type != RXT_IMAGE) return PE_BAD_SET_TYPE;
 		img = (REBSER*)arg->image;
 		if (!img || IMG_WIDE(img) == 0 || IMG_HIGH(img) == 0) return PE_BAD_SET;
+		slot = Tex_Use(win, img);
+		if (!slot) return PE_BAD_SET;
+		Tex_Drop(win, im->slot);
+		im->slot = slot;
+		win->tex[slot - 1].dirty = TRUE;
 		RL_SET_VALUE(hob->series, SLOT_IMAGE, *arg, RXT_IMAGE);
 		im->image = img;
-		im->dirty = TRUE;
 		break; }
 
 	case W_PUGL_ARG_OFFSET:

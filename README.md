@@ -1,6 +1,8 @@
+[![Rebol-Pugl CI](https://github.com/Oldes/Rebol-Pugl/actions/workflows/main.yml/badge.svg)](https://github.com/Oldes/Rebol-Pugl/actions/workflows/main.yml)
+
 # Rebol/Pugl
 
-[Pugl](https://github.com/lv2/pugl) extension for [Rebol3](https://github.com/Oldes/Rebol3) (version 3.22.10 and higher)
+[Pugl](https://github.com/lv2/pugl) extension for [Rebol3](https://github.com/Oldes/Rebol3) (version 3.20.5 and higher)
 
 Pugl (PlUgin Graphics Library) is a minimal, portable API for embeddable GUIs. It supports
 Windows (Win32), macOS (Cocoa) and Linux (X11), with stub (native) and OpenGL drawing backends.
@@ -107,6 +109,7 @@ Makes a group in a window or a group and returns its handle
 /visible?         logic!              none                          "Whether the window is currently visible"
 /open?            logic!              none                          "False once the window has been closed"
 /images           block!              none                          "Images and groups added to it, in drawing order - the first one at the bottom"
+/textures         integer!            none                          "How many textures it holds - one per image! shown, however many image handles show it"
 /icon             image!              [image! none!]                "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
 ```
 

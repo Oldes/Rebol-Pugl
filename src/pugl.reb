@@ -49,6 +49,18 @@ extern REBCNT Handle_PuglGroup;
 extern REBDEV Dev_Pugl;
 extern int    Pugl_Dev_Id;
 
+// A texture of a window, shared by every image handle in it showing the
+// same image! - uploaded once, however many handles show it. A slot is
+// free while nothing uses it (refs 0); slots are never moved, so a handle
+// keeps its slot number.
+typedef struct Pugl_Texture {
+	void   *image;   // the image! series it is made from (marked by the handles)
+	REBCNT  texture; // GL texture name, 0 before the first draw
+	REBINT  w, h;    // the size it was made with
+	REBCNT  refs;    // image handles using it
+	REBCNT  dirty;   // the pixels must be uploaded again
+} PUGLTEX;
+
 // The payload is opaque (`view` is a void* rather than a PuglView*), so
 // that gen-pugl.h stays free of pugl's own headers.
 typedef struct Pugl_Window_Context {
@@ -67,6 +79,11 @@ typedef struct Pugl_Window_Context {
 	// (PUGLNODE*), in the order they are drawn - the first one at the
 	// bottom. A group draws its own the same way, where it is in the list.
 	void   *images;
+
+	// The textures of its images, shared between handles showing the same
+	// image!, in slots which do not move (PUGLTEX).
+	PUGLTEX *tex;
+	REBCNT   tex_size;
 
 	// Textures of images removed while the window was open. A texture
 	// belongs to the window's GL context, which is current only while it
@@ -114,9 +131,7 @@ typedef struct Pugl_Node_Context {
 	double  px, py;
 	double  opacity; // 0.0 - 1.0
 	REBCNT  blend;   // W_PUGL_BLEND_*, or 0 for the group's (normal at the top)
-	REBCNT  texture;      // GL texture name, 0 before the first draw
-	REBINT  tex_w, tex_h; // the size it was made with
-	REBCNT  dirty;        // the pixels must be uploaded again
+	REBCNT  slot;    // its window's texture slot, 1-based; 0 for none
 } PUGLNODE;
 }
 
@@ -153,6 +168,7 @@ handles: [
 		visible? logic!    none      "Whether the window is currently visible"
 		open?    logic!    none      "False once the window has been closed"
 		images   block!    none      "Images and groups added to it, in drawing order - the first one at the bottom"
+		textures integer!  none      "How many textures it holds - one per image! shown, however many image handles show it"
 		icon     image!    [image! none!] "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
 	]
 	image: [

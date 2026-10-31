@@ -62,12 +62,14 @@ spare: open-window/hidden 200x100
 spare-img: add-image spare make image! 8x8 0x0
 print ["spare:           " spare]
 print ["open?:           " spare/open? "(expected true)"]
+print ["textures:        " spare/textures "(expected 1)"]
 print ["close-window:    " close-window spare "(expected true)"]
 print ["open? after:     " spare/open? "(expected false)"]
 print ["size after:      " mold spare/size "(expected none)"]
 print ["title after:     " mold spare/title "(expected none)"]
 print ["id after:        " spare/id "(expected 0)"]
 print ["molded:          " spare "(expected closed)"]
+print ["textures after:  " mold spare/textures "(expected none)"]
 print ["closing twice:   " close-window spare "(expected true)"]
 print ["show refused:    " error? try [show-window spare]]
 print ["redraw refused:  " error? try [redraw spare]]
@@ -262,6 +264,9 @@ print ["read-only hover?:" error? try [img1/hover?: true]]
 ;; The same image twice: scaled to twice its size, and at its own over pic.
 img2: add-image/size stage small 300x40 128x128
 img3: add-image stage small 200x200
+;; A texture per image! in the window, not per handle: img2 and img3 both
+;; show `small`, so they share one.
+print ["textures:        " window/textures "(expected 2 - pic, and small for both)"]
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 print ["scaled:          " img2/size "(expected 128x128)"]
@@ -304,16 +309,20 @@ print ["own size again:  " img2/size "(expected 64x64)"]
 wait 0.3
 img2/size: 128x128
 
-;; WATCH: drawing into `small` changes BOTH images showing it - one redraw
-;; of the window uploads it for each: the gradient was upside down (and
-;; blue), now it is the right way up, red to the right and green down.
+;; WATCH: drawing into `small` changes BOTH images showing it - and a
+;; redraw of just one of them is enough, as they share its texture: the
+;; gradient was upside down (and blue), now it is the right way up, red to
+;; the right and green down.
 paint small 0
-redraw window
+redraw img3
 wait 0.3
 
 ;; Another image in place of the one shown, of another size.
 img3/image: make image! [32x32 255.200.0]
 print ["swapped:         " img3/size "(expected 32x32)"]
+print ["textures:        " window/textures "(expected 3 - img2 keeps small)"]
+img3/image: img3/image
+print ["set again:       " window/textures "(expected 3 - the same image! keeps its texture)"]
 center-content
 wait 0.3
 
@@ -326,6 +335,7 @@ print ["pointer part:    " before "(different from img1's:" (before <> pointer-o
 print ["remove-image:    " remove-image img3 "(expected true)"]
 print ["the same after:  " before = pointer-of img3 "(expected true)"]
 print ["images:          " length? stage/images "(expected 2)"]
+print ["textures:        " window/textures "(expected 2 - its own went with it)"]
 center-content
 print ["centered:        " centered? "(expected true)"]
 print ["removed:         " img3 "(expected 0#... removed)"]
@@ -360,6 +370,7 @@ g1: add-image grp dot 0x0
 g2: add-image grp dot 30x0
 inner: add-group grp 0x30
 g3: add-image inner dot 15x0
+print ["textures:        " window/textures "(expected 3 - one for the three dots)"]
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 print ["group molded:    " mold grp "(expected 0#... 3 at 300x200)"]
@@ -407,6 +418,7 @@ print ["index after:     " mold tmp/index "(expected none)"]
 print ["move refused:    " error? try [tmp/index: 'top]]
 print ["add to removed:  " error? try [add-image tmp dot 0x0]]
 print ["left in group:   " length? grp/images "(expected 3)"]
+print ["textures:        " window/textures "(expected 3 - the dot is still shown)"]
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 release tmp-img
@@ -433,6 +445,7 @@ scroll: add-image viewport big 0x0
 print ["image's size:    " scroll/size "(expected 256x256 - not clipped itself)"]
 nested: add-group/size viewport 40x40 64x64
 corner: add-image nested dot 12x12
+print ["textures:        " window/textures "(expected 4 - big; the corner is a dot too)"]
 center-content
 print ["counts its clip: " (second bounds-of reduce [viewport]) - (first bounds-of reduce [viewport]) "(expected 64x64)"]
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
@@ -550,6 +563,7 @@ mix: add-group stage 60x170
 sq-red:   add-image mix make image! [48x48 255.0.0] 0x0
 sq-green: add-image mix make image! [48x48 0.255.0] 24x0
 sq-blue:  add-image mix make image! [48x48 0.0.255] 12x20
+print ["textures:        " window/textures "(expected 7 - three new image! values)"]
 center-content
 mix/blend: 'add
 print ["set:             " mold mix/blend "(expected add)"]

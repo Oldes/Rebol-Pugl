@@ -74,26 +74,28 @@ static REBYTE *Premultiplied(const REBYTE *bgra, REBINT w, REBINT h)
 }
 
 /***********************************************************************
-**  Uploads an image's pixels into its texture, when they are new or
+**  Uploads an image!'s pixels into its texture, when they are new or
 **  `dirty` (set by `redraw` and by assigning `image`) - so an expose
 **  from the OS, the window uncovered say, draws what it already has.
+**  The texture is shared by every handle showing the image!, so it is
+**  uploaded once a draw at most, by the first of them drawn.
 **
 **  The image! layout is B G R A in memory with straight alpha, 255
 **  opaque: GL_BGRA / GL_UNSIGNED_BYTE, premultiplied on the way.
 ***********************************************************************/
-static void Upload(PUGLNODE *im, REBSER *img, REBINT w, REBINT h)
+static void Upload(PUGLTEX *t, REBSER *img, REBINT w, REBINT h)
 {
 	GLuint  tex;
 	REBYTE *pixels;
 
-	if (!im->texture) {
+	if (!t->texture) {
 		glGenTextures(1, &tex);
-		im->texture = (REBCNT)tex;
-		im->tex_w = im->tex_h = 0;
-		im->dirty = TRUE;
+		t->texture = (REBCNT)tex;
+		t->w = t->h = 0;
+		t->dirty = TRUE;
 	}
-	glBindTexture(GL_TEXTURE_2D, (GLuint)im->texture);
-	if (!im->dirty) return;
+	glBindTexture(GL_TEXTURE_2D, (GLuint)t->texture);
+	if (!t->dirty) return;
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -103,16 +105,16 @@ static void Upload(PUGLNODE *im, REBSER *img, REBINT w, REBINT h)
 	pixels = Premultiplied((const REBYTE*)IMG_DATA(img), w, h);
 	if (!pixels) return;   // stays dirty, and is tried again next time
 	// Same size: replace the pixels in place; otherwise a new texture.
-	if (w == im->tex_w && h == im->tex_h) {
+	if (w == t->w && h == t->h) {
 		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
 		                GL_BGRA, GL_UNSIGNED_BYTE, pixels);
 	} else {
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
 		             GL_BGRA, GL_UNSIGNED_BYTE, pixels);
-		im->tex_w = w;
-		im->tex_h = h;
+		t->w = w;
+		t->h = h;
 	}
-	im->dirty = FALSE;
+	t->dirty = FALSE;
 }
 
 /***********************************************************************
@@ -207,8 +209,8 @@ static void Set_Blend(REBCNT mode)
 **  transform and its opacity. A clipping group marks its box one level
 **  up, draws what is in it at that level, and takes the mark back.
 ***********************************************************************/
-static void Draw_List(PUGLNODE *im, const PUGLXFORM *parent, float alpha, REBCNT blend,
-                      GLint level, float win_w, float win_h)
+static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float alpha,
+                      REBCNT blend, GLint level, float win_w, float win_h)
 {
 	for (; im; im = (PUGLNODE*)im->next) {
 		REBSER   *img = (REBSER*)im->image;
@@ -226,23 +228,23 @@ static void Draw_List(PUGLNODE *im, const PUGLXFORM *parent, float alpha, REBCNT
 		if (im->group) {
 			REBOOL clips = (im->w > 0 || im->h > 0) && level < 255;
 			if (!clips) {
-				Draw_List((PUGLNODE*)im->children, &m, a, b, level, win_w, win_h);
+				Draw_List(win, (PUGLNODE*)im->children, &m, a, b, level, win_w, win_h);
 				continue;
 			}
 			Stencil_Box(im, &m, level, +1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level + 1, 0xFF);
-			Draw_List((PUGLNODE*)im->children, &m, a, b, level + 1, win_w, win_h);
+			Draw_List(win, (PUGLNODE*)im->children, &m, a, b, level + 1, win_w, win_h);
 			Stencil_Box(im, &m, level + 1, -1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level, 0xFF);
 			continue;
 		}
 
-		if (!img) continue;
+		if (!img || !im->slot || im->slot > win->tex_size) continue;
 		iw = (REBINT)IMG_WIDE(img);
 		ih = (REBINT)IMG_HIGH(img);
 		if (iw <= 0 || ih <= 0) continue;
 
-		Upload(im, img, iw, ih);
+		Upload(&win->tex[im->slot - 1], img, iw, ih);
 		if (a <= 0.0f) continue;   // uploaded all the same, for when it shows
 
 		Load_Xform(&m);
@@ -300,7 +302,7 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 	glStencilFunc(GL_EQUAL, 0, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 
-	Draw_List((PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, W_PUGL_BLEND_NORMAL, 0,
+	Draw_List(pv, (PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, W_PUGL_BLEND_NORMAL, 0,
 	          (float)area.width, (float)area.height);
 
 	glDisable(GL_STENCIL_TEST);
