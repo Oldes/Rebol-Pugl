@@ -843,7 +843,9 @@ print as-yellow "^/== Events"
 
 print {
 Move the mouse over the window, click (left, right, middle), use the wheel,
-type, resize and move it, switch to another window and back.
+type - letters, and the keys with names: arrows, F1..F12, Home, End,
+Page Up/Down, Insert, Delete, Backspace, Shift-Tab, Shift, Control, Alt,
+the keypad - resize and move it, switch to another window and back.
 A left click on an image repaints it - the topmost one under the pointer -
 with its gradient turned another way and a new tint, brings it to the top
 with the groups it is in, and reports where on it the click was.
@@ -1007,7 +1009,19 @@ report: func [event /local type position d hit src own pixel][
 	]
 
 	;; Escape ends it; `do-events` sees the window closed and returns.
-	if all [type = 'key  event/key = #"^["] [
+	;; A key with a name is a word, every other key a character - and the
+	;; named ones never come as characters, the same as in Rebol-GUI.
+	if find [named-key named-key-up] type [
+		unless word? event/key [print as-red reform ["!!" type "with no name:" mold event/key]]
+	]
+	if find [key key-up] type [
+		unless char? event/key [print as-red reform ["!!" type "not a char!:" mold event/key]]
+		if find [#"^[" #"^H" #"^~"] event/key [
+			print as-red reform ["!!" mold event/key "should be a named key"]
+		]
+	]
+
+	if all [type = 'named-key  event/key = 'escape] [
 		print "Escape - closing the window"
 		close-window window
 	]
@@ -1042,7 +1056,7 @@ report: func [event /local type position d hit src own pixel][
 		as-green pad form type 12
 		case [
 			type = 'scroll-line   [ajoin ["lines: " event/code]]
-			find [key key-up] type [ajoin [mold event/key " " mold event/flags]]
+			find [key key-up named-key named-key-up] type [ajoin [mold event/key " " mold event/flags]]
 			find [close active inactive] type [""]
 			true [ajoin [pad mold position 12 mold event/flags]]
 		]

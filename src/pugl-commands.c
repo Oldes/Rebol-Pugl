@@ -576,6 +576,66 @@ static void Hover_To(REBSER *blk, REBCNT *at, PUGLWIN *win,
 	win->hover_y = y;
 }
 
+/***********************************************************************
+**  A key with a name in system/catalog/event-keys: the EVK_* number,
+**  or 0. The same keys, and the same names, as Rebol-GUI reports - so
+**  a handler works with either extension.
+**
+**  Escape, Backspace and Delete are named although Pugl gives them a
+**  codepoint (they make no character in a text); Shift-Tab is `backtab`.
+**  Tab and Enter stay characters, #"^-" and #"^M". The keypad's own
+**  navigation keys - Num Lock off - are the main ones'.
+***********************************************************************/
+static REBCNT Named_Key_Of(u32 key, PuglMods mods)
+{
+	if (key >= PUGL_KEY_F1 && key <= PUGL_KEY_F12) return EVK_F1 + (REBCNT)(key - PUGL_KEY_F1);
+	switch (key) {
+	case PUGL_KEY_PAGE_UP:   case PUGL_KEY_PAD_PAGE_UP:   return EVK_PAGE_UP;
+	case PUGL_KEY_PAGE_DOWN: case PUGL_KEY_PAD_PAGE_DOWN: return EVK_PAGE_DOWN;
+	case PUGL_KEY_END:       case PUGL_KEY_PAD_END:       return EVK_END;
+	case PUGL_KEY_HOME:      case PUGL_KEY_PAD_HOME:      return EVK_HOME;
+	case PUGL_KEY_LEFT:      case PUGL_KEY_PAD_LEFT:      return EVK_LEFT;
+	case PUGL_KEY_UP:        case PUGL_KEY_PAD_UP:        return EVK_UP;
+	case PUGL_KEY_RIGHT:     case PUGL_KEY_PAD_RIGHT:     return EVK_RIGHT;
+	case PUGL_KEY_DOWN:      case PUGL_KEY_PAD_DOWN:      return EVK_DOWN;
+	case PUGL_KEY_INSERT:    case PUGL_KEY_PAD_INSERT:    return EVK_INSERT;
+	case PUGL_KEY_DELETE:    case PUGL_KEY_PAD_DELETE:    return EVK_DELETE;
+	case PUGL_KEY_PAD_CLEAR:                              return EVK_BEGIN;   // keypad 5, Num Lock off
+	case PUGL_KEY_ESCAPE:    return EVK_ESCAPE;
+	case PUGL_KEY_BACKSPACE: return EVK_BACKSPACE;
+	case PUGL_KEY_PAUSE:     return EVK_PAUSE;
+	case PUGL_KEY_CAPS_LOCK: return EVK_CAPITAL;
+	case PUGL_KEY_SHIFT_L:   case PUGL_KEY_SHIFT_R: return EVK_SHIFT;
+	case PUGL_KEY_CTRL_L:    case PUGL_KEY_CTRL_R:  return EVK_CONTROL;
+	case PUGL_KEY_ALT_L:     case PUGL_KEY_ALT_R:   return EVK_ALT;
+	case PUGL_KEY_TAB:       return (mods & PUGL_MOD_SHIFT) ? EVK_BACKTAB : 0;
+	}
+	return 0;
+}
+
+/***********************************************************************
+**  The character of a key which has no name: its codepoint - and for
+**  the keypad, the digit or operator printed on it. 0 for a key with
+**  neither (Print Screen, Menu, Num Lock, Scroll Lock, Super...), which
+**  is not reported, as in Rebol-GUI.
+***********************************************************************/
+static u32 Char_Of_Key(u32 key)
+{
+	if (key >= PUGL_KEY_PAD_0 && key <= PUGL_KEY_PAD_9) return '0' + (key - PUGL_KEY_PAD_0);
+	switch (key) {
+	case PUGL_KEY_PAD_ENTER:     return '\r';
+	case PUGL_KEY_PAD_EQUAL:     return '=';
+	case PUGL_KEY_PAD_MULTIPLY:  return '*';
+	case PUGL_KEY_PAD_ADD:       return '+';
+	case PUGL_KEY_PAD_SEPARATOR: return ',';
+	case PUGL_KEY_PAD_SUBTRACT:  return '-';
+	case PUGL_KEY_PAD_DECIMAL:   return '.';
+	case PUGL_KEY_PAD_DIVIDE:    return '/';
+	}
+	if (key == 0 || (key >= 0xE000 && key <= 0xF8FF)) return 0;
+	return key;
+}
+
 static const REBCNT Down_Types[3] = { EVT_DOWN, EVT_ALT_DOWN, EVT_AUX_DOWN };
 static const REBCNT Up_Types[3]   = { EVT_UP,   EVT_ALT_UP,   EVT_AUX_UP   };
 
@@ -640,15 +700,23 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		break; }
 
 	case PUGL_KEY_PRESS:
-	case PUGL_KEY_RELEASE:
-		// Pugl's key is the UNSHIFTED codepoint. Keys without one (F1,
-		// arrows...) live in the Private Use Area and need a mapping to
-		// EVT_NAMED_KEY - not done yet, so they are skipped.
-		if (e->key.key == 0 || (e->key.key >= 0xE000 && e->key.key <= 0xF8FF)) break;
-		Append_Event(blk, at, pv,
-			e->type == PUGL_KEY_PRESS ? EVT_KEY : EVT_KEY_UP,
-			HAS_CODE | Modifier_Bits(e->key.state), (u32)e->key.key);
-		break;
+	case PUGL_KEY_RELEASE: {
+		// Pugl's key is the UNSHIFTED codepoint, or for a key without one
+		// (F1, arrows...) a code of its own in the Private Use Area. Those
+		// are the named keys; the rest is a character.
+		REBOOL up    = (e->type == PUGL_KEY_RELEASE);
+		REBCNT named = Named_Key_Of(e->key.key, e->key.state);
+		u32    code;
+		if (named) {
+			Append_Event(blk, at, pv, up ? EVT_NAMED_KEY_UP : EVT_NAMED_KEY,
+				HAS_CODE | Modifier_Bits(e->key.state), (u32)named);
+			break;
+		}
+		code = Char_Of_Key(e->key.key);
+		if (!code) break;   // no character, nor a name the core has
+		Append_Event(blk, at, pv, up ? EVT_KEY_UP : EVT_KEY,
+			HAS_CODE | Modifier_Bits(e->key.state), code);
+		break; }
 
 	case PUGL_FOCUS_IN:
 	case PUGL_FOCUS_OUT:
