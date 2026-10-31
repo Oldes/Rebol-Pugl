@@ -5,6 +5,7 @@
 !/rebol
 !/src
 !/test
+!/font
 !/*.nest
 !/Entitlements.plist
 !/*.r3

@@ -28,9 +28,9 @@ print as-yellow "^/== The font file"
 
 ;; The atlas is embedded compressed: loading it needs `decompress` and
 ;; nothing else - no image codec.
-spec: do %pixelzone-16.reb
+spec: do %font/pixelzone-16.reb
 print ["name:            " spec/name spec/size "px"]
-print ["atlas:           " spec/atlas/size "(expected 256x55)"]
+print ["atlas:           " spec/atlas/size "(expected 256x54)"]
 print ["glyphs:          " length? spec/glyphs "(expected 318)"]
 print ["a map:           " map? spec/glyphs "(expected true)"]
 ;; Every ink pixel opaque - 255 - and nothing else: the alpha came through.
@@ -77,7 +77,7 @@ print ["missing, boxed:  " text-size font "a漢b" "vs skipped" text-size bare "a
 print as-yellow "^/== Text in a window"
 ;;=============================================================================
 
-window: open-window/title 460x300 "Pixelzone 16"
+window: open-window/title 460x360 "Bitmap fonts"
 print ["scale:           " window/scale "(device pixels per unit - a font pixel is that many)"]
 
 czech: "Příliš žluťoučký kůň úpěl ďábelské ódy."
@@ -122,7 +122,7 @@ print ["another font:    " skipped/font == bare]
 
 ;; Another font: Home Video, 20 px, monospaced - every character 12 wide -
 ;; and capitals only: its lowercase is drawn the same, and stored once.
-video: make-font do %homevideo-20.reb
+video: make-font do %font/homevideo-20.reb
 print ["Home Video:      " mold video]
 print ["line height:     " video/line-height "(expected 18)"]
 print ["glyphs:          " video/glyphs "(expected 307)"]
@@ -130,6 +130,61 @@ print ["monospaced:      " text-size video "OK" text-size video "WW" "(expected 
 caps: add-text window video "Home Video: OK" 200x186
 caps/tint: 150.255.150
 print ["textures:        " window/textures "(expected 2 - each font's atlas)"]
+
+;; An outline font, Ubuntu Mono 16 - 8 wide - made twice: 1-bit, fitted to
+;; the pixels by the font's own hinting, and anti-aliased.
+mono:   make-font do %font/ubuntumono-16.reb
+smooth: make-font do %font/ubuntumono-16-soft.reb
+print ["monospaced:      " text-size mono "Cancel" "(expected 48x17)"]
+crisp: add-text window mono "Ubuntu Mono, 1-bit" 170x232
+soft-text: add-text window smooth "Ubuntu Mono, smooth" 170x252
+
+;; Pixeloid Sans - its native 9 px, and its double, 18 - read from its
+;; outlines, so its accents are as drawn and fit its own line height.
+pixeloid:    make-font do %font/pixeloid-18.reb
+pixeloid-9:  make-font do %font/pixeloid-9.reb
+print ["Pixeloid 18:     " pixeloid/line-height "(expected 22)" text-size pixeloid "OK" "(expected 24x22)"]
+print ["Pixeloid 9:      " pixeloid-9/line-height "(expected 11)" text-size pixeloid-9 "OK" "(expected 12x11)"]
+big-label:   add-text window pixeloid "Pixeloid Sans: Příliš žluťoučký" 12x292
+small-label: add-text window pixeloid-9 "Pixeloid Sans 9 px" 330x14
+
+;; Midnight Letters - a bold display font, at its fractional native size of
+;; 20.48 px, read from its outlines; it has no ř ť ď - boxed.
+midnight: make-font do %font/midnight-20.reb
+print ["Midnight:        " midnight/line-height "(expected 25)" text-size midnight "OK" "(expected 34x25)"]
+heading: add-text window midnight "Midnight Letters" 12x322
+heading/tint: 255.220.120
+
+;; Karma Suture - its cells not square, 49.25 by 63.1875 units, read so
+;; one cell is one pixel: letters a little squatter than drawn.
+karma: make-font do %font/karma-suture-16.reb
+print ["Karma Suture:    " karma/line-height "(expected 19)" text-size karma "OK" "(expected 24x19)"]
+suture: add-text window karma "Karma Suture: ďábel" 250x40
+suture/tint: 200.160.255
+
+;; Ubuntu - proportional, anti-aliased at 16 px, its advances rounded to
+;; whole pixels.
+ubuntu: make-font do %font/ubuntu-16.reb
+print ["Ubuntu:          " ubuntu/line-height "(expected 20)" text-size ubuntu "OK" "(expected 22x20)"]
+print ["proportional:    " text-size ubuntu "iii" text-size ubuntu "WWW" "(expected different widths)"]
+prop: add-text window ubuntu "Ubuntu, smooth: Příliš" 250x62
+
+;; The same at 13 px - a size for buttons and other widgets - and twice
+;; that, 26 px, for a screen with 2 device pixels per unit or more (Retina):
+;; drawn at half its size, so 13 units again, but sharp.
+ubuntu-13: make-font do %font/ubuntu-13.reb
+ubuntu-26: make-font do %font/ubuntu-26.reb
+print ["Ubuntu 13:       " ubuntu-13/line-height "(expected 16)" text-size ubuntu-13 "OK" "(expected 18x16)"]
+print ["Ubuntu 26:       " ubuntu-26/line-height "(expected 31)" text-size ubuntu-26 "OK" "(expected 36x31 - halved when drawn)"]
+hi-dpi?: window/scale >= 1.5
+widget-text: add-text window either hi-dpi? [ubuntu-26][ubuntu-13] "Ubuntu 13: Cancel  OK" 250x84
+if hi-dpi? [
+	;; Half of 26 is 13; linear, for a scale like 1.5 where it does not land
+	;; on whole pixels.
+	widget-text/scale:  0.5
+	widget-text/filter: 'linear
+]
+print ["for this screen: " either hi-dpi? ["26 px at half"]["13 px"] "- the window scale is" window/scale]
 
 ;; Faded and in colour.
 soft: add-text window font "tinted, at 60%" 12x190
@@ -156,14 +211,18 @@ center-label: does [
 center-label
 button/track?: true
 button/cursor: 'hand
-print ["textures:        " window/textures "(expected 3 - the two atlases and the frame)"]
+print ["textures:        " window/textures "(expected 11 - ten fonts' atlases - Ubuntu 13 or 26, not both - and the frame)"]
 
 print {
 WATCH: a Czech line; a big orange "Hello, Pugl!"; the same three lines
 centred and right-aligned; a pink line with arrows, a star and a Chinese
 character drawn as hollow boxes, and a grey one where they are skipped; a
 faded light blue line; a green "HOME VIDEO: OK" in the wider, capitals-only
-Home Video font; a button. Hover the button - it lights up - and
+Home Video font; a button, and right of it Ubuntu Mono twice - 1-bit crisp,
+and anti-aliased smooth; Pixeloid Sans at 18 px at the bottom, and at
+its native 9 px top right; a violet Karma Suture under it, a smooth proportional Ubuntu under that, and
+the same smaller, at 13 px - as sharp on Retina; Midnight Letters in yellow at the very
+bottom. Hover the button - it lights up - and
 click it: its label counts the clicks.
 Escape or the close button ends the test.
 }

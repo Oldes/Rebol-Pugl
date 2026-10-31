@@ -7,7 +7,7 @@ REBOL [
 		font-atlas.py; the atlas is embedded compressed, so no image codec
 		is needed.
 
-		    font: make-font do %homevideo-20.reb
+		    font: make-font do %font/homevideo-20.reb
 	}
 	Note: {Creative Commons Zero v1.0 Universal}
 ]
