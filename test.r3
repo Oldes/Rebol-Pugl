@@ -657,7 +657,6 @@ print ["outside:         " error? try [sprite/part: [100x0 32x32]]]
 print ["zero size:       " error? try [sprite/part: [0x0 0x10]]]
 print ["before the head: " error? try [sprite/part: [-1x0 8x8]]]
 print ["only one pair:   " error? try [sprite/part: [0x0]]]
-print ["three values:    " error? try [sprite/part: [0x0 8x8 8x8]]]
 print ["not pairs:       " error? try [sprite/part: [0 8]]]
 print ["a string:        " error? try [sprite/part: "x"]]
 print ["bad /part:       " error? try [add-image/part stage atlas 0x0 [96x0 64x32]]]
@@ -670,12 +669,29 @@ print ["the whole of it: " sprite/size "(expected 128x32)"]
 sprite/part: [0x0 32x32]
 print ["a frame again:   " sprite/size "(expected 32x32)"]
 
+;; Only the first two values are used, so one block can hold all the
+;; frames and be walked - at its index, as any series.
+frames: [0x0 32x32  32x0 32x32  64x0 32x32  96x0 32x32]
+sprite/part: skip frames 4
+print ["more values:     " mold sprite/part "(expected [64x0 32x32] - the rest not looked at)"]
+print ["the block kept:  " length? frames "(expected 8)"]
+print ["odd values left: " error? try [sprite/part: back tail frames] "(expected true - one pair only)"]
+strip: collect [
+	pos: frames
+	forskip pos 2 [keep add-image/part stage atlas 20x240 pos]
+]
+print ["one per frame:   " length? strip "(expected 4)"]
+print ["each its own:    " mold collect [foreach piece strip [keep piece/part/1]] "(expected [0x0 32x0 64x0 96x0])"]
+print ["one texture:     " window/textures - textures-before "(expected 1 - still)"]
+foreach piece strip [remove-image piece]
+center-content
+
 ;; WATCH: over the top-right of the big gradient, the sprite steps through its four frames
 ;; three times, each turned another way; its twin, twice as big, shows the
 ;; second frame all along.
-repeat i 12 [
-	sprite/part: reduce [as-pair (i % 4) * 32 0  32x32]
-	wait 0.1
+loop 3 [
+	pos: frames
+	forskip pos 2 [sprite/part: pos  wait 0.1]
 ]
 print ["still one:       " window/textures - textures-before "(expected 1 - nothing was uploaded)"]
 

@@ -209,16 +209,18 @@ static void Retire_Texture(PUGLWIN *win, REBCNT tex)
 }
 
 /***********************************************************************
-**  A part of an image! - [offset size], two pairs and nothing else, the
-**  size not zero, all of it inside the image. Into x, y, w, h.
+**  A part of an image! - [offset size], two pairs at the block's index,
+**  the size not zero, all of it inside the image. Into x, y, w, h.
+**
+**  What follows them is not looked at, so a block of many parts can be
+**  walked - `forskip parts 2 [add-image/part w img 0x0 parts]`.
 ***********************************************************************/
 static REBOOL Read_Part(REBSER *blk, REBCNT index, REBSER *img, REBINT part[4])
 {
-	RXIARG off, size, rest;
+	RXIARG off, size;
 
 	if (RL_GET_VALUE(blk, index,     &off)  != RXT_PAIR) return FALSE;
 	if (RL_GET_VALUE(blk, index + 1, &size) != RXT_PAIR) return FALSE;
-	if (RL_GET_VALUE(blk, index + 2, &rest) != 0)        return FALSE;  // only two
 
 	part[0] = (REBINT)off.pair.x;
 	part[1] = (REBINT)off.pair.y;
