@@ -207,6 +207,64 @@ box-through: function [node box [block!]][
 	reduce [lo hi]
 ]
 
+;; Handles compare by type only with `=`, so blocks of them are searched
+;; with `==`.
+has?: function [list [block!] value][
+	foreach v list [if v == value [return true]]
+	false
+]
+;; The image or group and every group it is in, innermost first.
+chain-of: function [node][
+	chain: copy []
+	while [node][append chain node  node: node/parent]
+	chain
+]
+;; A point of the window in a node's own units - through every group it is
+;; in, outermost first.
+local-of: function [node point [pair!]][
+	foreach n reverse chain-of node [
+		unless point: to-local n point [return none]
+	]
+	point
+]
+
+;; The topmost image under a point, or none - the last one added is on top,
+;; and each takes the point back through its transform, so a turned image
+;; is hit by its real shape. The extension's own is `image-at`; this one is
+;; the test's, to check it against.
+find-image: function [point [pair!]][top-at window/images point]
+;; The first of a node and the groups it is in which tracks the pointer.
+tracked-in: function [node][
+	while [node][
+		if node/track? [return node]
+		node: node/parent
+	]
+	none
+]
+top-at: function [list [block!] point [pair!]][
+	hit: none
+	foreach node list [
+		unless node/visible? [continue]
+		unless inside: to-local node point [continue]
+		either node/type = 'pugl-group [
+			clip: node/size
+			;; What a group clips away is not there to be hit.
+			unless any [
+				all [clip/x > 0  any [inside/x < 0  inside/x >= clip/x]]
+				all [clip/y > 0  any [inside/y < 0  inside/y >= clip/y]]
+			][
+				if found: top-at node/images inside [hit: found]
+			]
+		][
+			if all [
+				inside/x >= 0  inside/y >= 0
+				inside/x < node/size/x  inside/y < node/size/y
+			][hit: node]
+		]
+	]
+	hit
+]
+
 bounds-of: function [
 	"The box a list's content takes, from the list's origin - [top-left bottom-right], or none"
 	list [block!]
@@ -256,6 +314,11 @@ print ["its window:      " img1/window == window "(expected true)"]
 print ["on the stage:    " img1/parent == stage "(expected true)"]
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+;; `image-at` - the topmost image at a point of the window, the same hit
+;; test the pointer events use.
+print ["image-at:        " (image-at window stage/offset + img1/offset + 5x5) == img1 "(expected true)"]
+print ["nothing there:   " mold image-at window -5x-5 "(expected none)"]
+print ["not a window:    " error? try [image-at img1 0x0]]
 print ["track?:          " img1/track? "(expected false - off by default)"]
 print ["hover?:          " img1/hover? "(expected false)"]
 img1/track?: true
@@ -798,6 +861,17 @@ pattern/fill: 'round  wait 0.5
 pattern/fill: 'tile
 print ["pattern:         " pattern/size mold pattern/fill "(expected 80x48 tile)"]
 
+;; The extension's hit test and the test's own agree everywhere - over all
+;; of the above: turned, scaled, clipped, nested, hidden.
+disagree: 0
+repeat y 16 [
+	repeat x 24 [
+		point: as-pair x * 20 + 0.5  y * 20 + 0.5
+		unless (image-at window point) == find-image point [disagree: disagree + 1]
+	]
+]
+print ["hit tests agree: " disagree = 0 "(expected true)" disagree "points differ"]
+
 ;;=============================================================================
 print as-yellow "^/== An icon"
 ;;=============================================================================
@@ -853,6 +927,9 @@ The two big images, the group of white squares, its lower square's group
 and the top-left square report `enter` and `leave` themselves (as the event
 source); the window reports its own when the pointer crosses its edge.
 Moving between the squares of the group does not leave the group.
+A press on a tracked one comes from it - or from its tracked group - and so
+do its release and the drag, even when the pointer goes off it; a scroll
+over one comes from it too.
 The viewport and the big image in it are tracked too: over its clipped
 away part there is nothing to enter. The scaled small image and the
 viewport are turned - they are entered and left by their turned shape.
@@ -867,6 +944,7 @@ ESCAPE or the close button ends the test.
 last-move: 0x0
 pressed: none   ;; the button between its `down` and its `up`
 over:    []     ;; tracked images and groups between `enter` and `leave`
+captured: none  ;; what took the press, until its release
 
 ;; On demand: only these report `enter` and `leave`.
 img1/track?:  true
@@ -876,55 +954,6 @@ inner/track?: true
 g1/track?:    true
 viewport/track?: true
 scroll/track?:   true
-
-;; Handles compare by type only with `=`, so blocks of them are searched
-;; with `==`.
-has?: function [list [block!] value][
-	foreach v list [if v == value [return true]]
-	false
-]
-;; The image or group and every group it is in, innermost first.
-chain-of: function [node][
-	chain: copy []
-	while [node][append chain node  node: node/parent]
-	chain
-]
-;; A point of the window in a node's own units - through every group it is
-;; in, outermost first.
-local-of: function [node point [pair!]][
-	foreach n reverse chain-of node [
-		unless point: to-local n point [return none]
-	]
-	point
-]
-
-;; The topmost image under a point, or none - the last one added is on top,
-;; and each takes the point back through its transform, so a turned image
-;; is hit by its real shape.
-image-at: function [point [pair!]][top-at window/images point]
-top-at: function [list [block!] point [pair!]][
-	hit: none
-	foreach node list [
-		unless node/visible? [continue]
-		unless inside: to-local node point [continue]
-		either node/type = 'pugl-group [
-			clip: node/size
-			;; What a group clips away is not there to be hit.
-			unless any [
-				all [clip/x > 0  any [inside/x < 0  inside/x >= clip/x]]
-				all [clip/y > 0  any [inside/y < 0  inside/y >= clip/y]]
-			][
-				if found: top-at node/images inside [hit: found]
-			]
-		][
-			if all [
-				inside/x >= 0  inside/y >= 0
-				inside/x < node/size/x  inside/y < node/size/y
-			][hit: node]
-		]
-	]
-	hit
-]
 
 report: func [event /local type position d hit src own pixel][
 	type:     event/type
@@ -936,18 +965,28 @@ report: func [event /local type position d hit src own pixel][
 		last-move: position
 	]
 
-	;; Every event names the window it came from - or, for `enter` and
-	;; `leave` of a tracked image or group, that one.
+	;; The extension's hit test and the test's own agree.
+	if position [
+		unless (image-at window position) == find-image position [
+			print as-red reform ["!! image-at disagrees at" position]
+		]
+	]
+
+	;; Every event names the window it came from - or a tracked image or
+	;; group: for its `enter` and `leave`, for a press on it, the release
+	;; and drag which follow wherever the pointer goes, and for a scroll.
 	src: event/source
-	either find [pugl-image pugl-group] src/type [
-		unless find [enter leave] type [print as-red reform ["!!" type "from" src/type]]
+	node?: did find [pugl-image pugl-group] src/type
+	if node? [
 		unless src/track? [print as-red "!! not tracked"]
 		unless src/window == window [print as-red "!! of another window"]
+	]
+	either all [node?  find [enter leave] type] [
 		either type = 'enter [
 			;; Entered once, while it has the top image under the pointer,
 			;; and after the tracked groups around it.
 			if has? over src [print as-red "!! entered twice"]
-			unless has? chain-of image-at position src [
+			unless has? chain-of find-image position src [
 				print as-red reform ["!! entered what is not on top at" position]
 			]
 			foreach up next chain-of src [
@@ -972,7 +1011,31 @@ report: func [event /local type position d hit src own pixel][
 		]
 		exit
 	][
-		unless event/source == window [print as-red "!! event from another window"]
+		;; Where it should come from: a first press from what is tracked
+		;; under it, which then has the pointer until the release - its
+		;; other presses, the release and the drag moves; anything else
+		;; from the window. A scroll carries no position, so it is only
+		;; checked to come from something tracked.
+		expected: case [
+			find [down alt-down aux-down] type [
+				unless pressed [captured: tracked-in find-image position]
+				captured
+			]
+			find [up alt-up aux-up] type [captured]
+			type = 'move  [either pressed [captured][none]]
+			type = 'scroll-line [either node? [src][none]]
+			true [none]
+		]
+		unless src == any [expected window] [
+			print as-red reform ["!!" type "from" src "- expected" any [expected window]]
+		]
+		if find [up alt-up aux-up] type [captured: none]
+		if node? [
+			print [
+				as-green pad form type 12
+				pad mold position 12 select [pugl-image "from image:" pugl-group "from group:"] src/type src
+			]
+		]
 	]
 	;; The window's own leave comes after those of what is in it.
 	if all [type = 'leave  not empty? over] [print as-red reform ["!! left the window while in" length? over]]
@@ -1030,7 +1093,7 @@ report: func [event /local type position d hit src own pixel][
 	;; be shown again. Nothing is copied. A scaled image is drawn at a size
 	;; other than its own, so where on its pixels is worked out from both.
 	if type = 'down [
-		either hit: image-at position [
+		either hit: find-image position [
 			;; Its own pixels are its part's, when it shows only a part.
 			own:   either hit/part [hit/part/2][hit/image/size]
 			pixel: (local-of hit position) * own / hit/size
@@ -1043,7 +1106,7 @@ report: func [event /local type position d hit src own pixel][
 			foreach node chain-of hit [node/index: 'top]
 			unless all [
 				hit/index = length? either hit/parent [hit/parent/images][window/images]
-				hit == image-at position
+				hit == find-image position
 			][print as-red "!! not on top after being raised"]
 		][
 			print "  on no image"

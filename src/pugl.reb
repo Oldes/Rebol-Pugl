@@ -9,6 +9,7 @@ REBOL [
 	Exports: [
 		open-window close-window show-window hide-window
 		poll-events do-events redraw add-image remove-image add-group
+		image-at
 	]
 	Purpose: {
 		Native top-level windows through the Pugl library.
@@ -103,6 +104,11 @@ typedef struct Pugl_Window_Context {
 	// the events converted so far - a move outside the window is reported
 	// only while one is, the same on every platform.
 	REBCNT  buttons;
+
+	// The tracked image or group which took the press (PUGLNODE*): its
+	// `up` and its drag `move`s come from it until every button is up,
+	// wherever the pointer goes - so a button sees its own release.
+	void   *capture;
 } PUGLWIN;
 
 // An image shown in a window, or a group of them - the same context for
@@ -199,7 +205,7 @@ handles: [
 		offset   pair!     pair!     "Position of its top-left corner in the window - or in its group"
 		size     pair!     pair!     "Size it is drawn at - scaled to it; a zero axis is the image's own, or its part's"
 		visible? logic!    logic!    "Whether it is drawn"
-		track?   logic!    logic!    "Whether `enter` and `leave` are reported for it, with the image as the source; off by default"
+		track?   logic!    logic!    "Whether it reports the pointer itself, as the event source: enter and leave, presses - and their release and drag, wherever the pointer goes - and scrolls over it; off by default"
 		hover?   logic!    none      "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
 		window   handle!   none      "The window it is shown in; none once removed"
 		parent   handle!   none      "The group it is in; none at the window's top level"
@@ -216,7 +222,7 @@ handles: [
 		offset   pair!     pair!     "Position of its origin in the window - or in its group; what is in it is placed relative to it"
 		size     pair!     pair!     "Size of the box from its origin which what is in it is clipped to - drawn and hit only inside; a zero axis is not clipped (default 0x0)"
 		visible? logic!    logic!    "Whether what is in it is drawn"
-		track?   logic!    logic!    "Whether `enter` and `leave` are reported for it as a whole, with the group as the source; off by default"
+		track?   logic!    logic!    "Whether it reports the pointer itself, as a whole, as the event source: enter and leave, and presses and scrolls over any of its images which do not track it themselves; off by default"
 		hover?   logic!    none      "Whether the pointer is over one of its images, as of the last `poll-events`"
 		images   block!    none      "Images and groups added to it, in drawing order"
 		window   handle!   none      "The window it is shown in; none once removed"
@@ -266,6 +272,11 @@ commands: [
 		target [handle!] "A window, or a group"
 		offset [pair!]   "Position of its origin - what is added to it is placed relative to it"
 		/size sz [pair!] "Clips what is in it to this size (default: not clipped)"
+	]
+	image-at: [
+		"The topmost visible image at a point of the window, or none - where it is drawn, turned and clipped"
+		window [handle!]
+		point  [pair!] "In the window, as an event's offset"
 	]
 ]
 

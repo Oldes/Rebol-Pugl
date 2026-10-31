@@ -96,6 +96,11 @@ Makes a group in a window or a group and returns its handle
 * `/size`
 * `sz` `[pair!]` Clips what is in it to this size (default: not clipped)
 
+#### `image-at` `:window` `:point`
+The topmost visible image at a point of the window, or none - where it is drawn, turned and clipped
+* `window` `[handle!]`
+* `point` `[pair!]` In the window, as an event's offset
+
 
 ## Used handles and its getters / setters
 
@@ -126,7 +131,7 @@ Makes a group in a window or a group and returns its handle
 /offset           pair!               pair!                         "Position of its top-left corner in the window - or in its group"
 /size             pair!               pair!                         "Size it is drawn at - scaled to it; a zero axis is the image's own, or its part's"
 /visible?         logic!              logic!                        "Whether it is drawn"
-/track?           logic!              logic!                        "Whether `enter` and `leave` are reported for it, with the image as the source; off by default"
+/track?           logic!              logic!                        "Whether it reports the pointer itself, as the event source: enter and leave, presses - and their release and drag, wherever the pointer goes - and scrolls over it; off by default"
 /hover?           logic!              none                          "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
 /window           handle!             none                          "The window it is shown in; none once removed"
 /parent           handle!             none                          "The group it is in; none at the window's top level"
@@ -145,7 +150,7 @@ Makes a group in a window or a group and returns its handle
 /offset           pair!               pair!                         "Position of its origin in the window - or in its group; what is in it is placed relative to it"
 /size             pair!               pair!                         "Size of the box from its origin which what is in it is clipped to - drawn and hit only inside; a zero axis is not clipped (default 0x0)"
 /visible?         logic!              logic!                        "Whether what is in it is drawn"
-/track?           logic!              logic!                        "Whether `enter` and `leave` are reported for it as a whole, with the group as the source; off by default"
+/track?           logic!              logic!                        "Whether it reports the pointer itself, as a whole, as the event source: enter and leave, and presses and scrolls over any of its images which do not track it themselves; off by default"
 /hover?           logic!              none                          "Whether the pointer is over one of its images, as of the last `poll-events`"
 /images           block!              none                          "Images and groups added to it, in drawing order"
 /window           handle!             none                          "The window it is shown in; none once removed"

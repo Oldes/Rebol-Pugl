@@ -344,6 +344,8 @@ static void Detach_Node(PUGLNODE *n)
 
 	if (!win) return;
 	if (In_Chain((PUGLNODE*)win->hover, n)) win->hover = n->parent;
+	// Nor does it get its release: that goes to the window.
+	if (In_Chain((PUGLNODE*)win->capture, n)) win->capture = NULL;
 	for (link = Node_List(win, (PUGLNODE*)n->parent); *link; link = (PUGLNODE**)&(*link)->next) {
 		if (*link == n) { *link = (PUGLNODE*)n->next; break; }
 	}
@@ -418,7 +420,8 @@ static void Close_Window(PUGLWIN *pv)
 	// Its images go with it. Their textures went with the GL context, so
 	// nothing is retired (pv->view is already NULL), and the list of the
 	// ones retired earlier is only memory now.
-	pv->hover = NULL;
+	pv->hover   = NULL;
+	pv->capture = NULL;
 	while (pv->images) Detach_Node((PUGLNODE*)pv->images);
 	if (pv->tex) FREE_MEM(pv->tex);
 	pv->tex = NULL;
@@ -524,6 +527,20 @@ static PUGLNODE *Image_At(PUGLNODE *list, double x, double y)
 		if (lx >= 0 && ly >= 0 && lx < w && ly < h) top = n;
 	}
 	return top;
+}
+
+// The first node from `n` up - itself, then the groups it is in - which
+// tracks the pointer, or NULL.
+static PUGLNODE *Tracked_In(PUGLNODE *n)
+{
+	for (; n; n = (PUGLNODE*)n->parent) if (n->track && n->hob) return n;
+	return NULL;
+}
+
+// The handle an event comes from: the node, or else the window.
+static REBHOB *Source_Of(PUGLWIN *win, PUGLNODE *n)
+{
+	return (n && n->hob) ? n->hob : win->hob;
 }
 
 // `enter` for the groups `n` is in and then `n` itself - outermost first -
@@ -651,17 +668,23 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 
 	switch (e->type) {
 	case PUGL_BUTTON_PRESS:
-	case PUGL_BUTTON_RELEASE:
+	case PUGL_BUTTON_RELEASE: {
 		// Primary, secondary, middle - nothing above is reported yet.
+		REBCNT held = pv->buttons;
 		if (e->button.button > 2) break;
 		if (e->type == PUGL_BUTTON_PRESS) pv->buttons |=  (1u << e->button.button);
 		else                              pv->buttons &= ~(1u << e->button.button);
 		Hover_To(blk, at, pv, (REBINT)e->button.x, (REBINT)e->button.y, TRUE);
-		Append_Event(blk, at, pv,
+		// The first press takes the pointer for what is tracked under it;
+		// the others, and every release, go where that one went.
+		if (e->type == PUGL_BUTTON_PRESS && !held)
+			pv->capture = Tracked_In((PUGLNODE*)pv->hover);
+		Append_Event_Of(blk, at, Source_Of(pv, (PUGLNODE*)pv->capture),
 			(e->type == PUGL_BUTTON_PRESS ? Down_Types : Up_Types)[e->button.button],
 			HAS_XY | Modifier_Bits(e->button.state),
 			XY_DATA(e->button.x, e->button.y));
-		break;
+		if (!pv->buttons) pv->capture = NULL;
+		break; }
 
 	case PUGL_MOTION:
 		// macOS sends the key window every move, the pointer inside it or
@@ -672,7 +695,10 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		 && (e->motion.x < 0 || e->motion.y < 0
 		  || e->motion.x >= pv->w || e->motion.y >= pv->h)) break;
 		Hover_To(blk, at, pv, (REBINT)e->motion.x, (REBINT)e->motion.y, TRUE);
-		Append_Event(blk, at, pv, EVT_MOVE,
+		// A drag comes from what took the press; any other move from the
+		// window - hovering is `enter` and `leave`.
+		Append_Event_Of(blk, at, Source_Of(pv, pv->buttons ? (PUGLNODE*)pv->capture : NULL),
+			EVT_MOVE,
 			HAS_XY | Modifier_Bits(e->motion.state),
 			XY_DATA(e->motion.x, e->motion.y));
 		break;
@@ -696,7 +722,11 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		// A smooth scroll smaller than a line is dropped for now.
 		REBINT lines = (REBINT)(e->scroll.dy < 0 ? e->scroll.dy - 0.5 : e->scroll.dy + 0.5);
 		if (lines == 0) break;
-		Append_Event(blk, at, pv, EVT_SCROLL_LINE, HAS_CODE, (u32)lines);
+		// What is tracked under the pointer scrolls - or, during a drag,
+		// what took the press.
+		Append_Event_Of(blk, at,
+			Source_Of(pv, pv->capture ? (PUGLNODE*)pv->capture : Tracked_In((PUGLNODE*)pv->hover)),
+			EVT_SCROLL_LINE, HAS_CODE, (u32)lines);
 		break; }
 
 	case PUGL_KEY_PRESS:
@@ -722,7 +752,7 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 	case PUGL_FOCUS_OUT:
 		// A release can happen where this window does not see it - over
 		// another one which took the focus - so nothing is held any more.
-		if (e->type == PUGL_FOCUS_OUT) pv->buttons = 0;
+		if (e->type == PUGL_FOCUS_OUT) { pv->buttons = 0; pv->capture = NULL; }
 		Append_Event(blk, at, pv,
 			e->type == PUGL_FOCUS_IN ? EVT_ACTIVE : EVT_INACTIVE, HAS_XY, 0);
 		break;
@@ -1019,6 +1049,25 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 	Window_Changed(win);
 
 	RETURN_HANDLE(hob);
+}
+
+
+/***********************************************************************
+**  image-at window [handle!] point [pair!]
+**
+**  The very hit test the pointer events use - transforms, clipping and
+**  visibility included; opacity and `track?` do not matter.
+***********************************************************************/
+COMMAND cmd_pugl_image_at(RXIFRM *frm, void *ctx)
+{
+	PUGLWIN  *win = Frm_Window(frm, 1);
+	PUGLNODE *hit;
+
+	if (!win || !win->view) RETURN_ERROR(ERR_INVALID_HANDLE);
+	hit = Image_At((PUGLNODE*)win->images,
+	               (double)RXA_PAIR(frm, 2).x, (double)RXA_PAIR(frm, 2).y);
+	if (!hit || !hit->hob) return RXR_NONE;
+	RETURN_HANDLE(hit->hob);
 }
 
 
