@@ -30,13 +30,13 @@ print as-yellow "^/== The font file"
 ;; nothing else - no image codec.
 spec: do %pixelzone-16.reb
 print ["name:            " spec/name spec/size "px"]
-print ["atlas:           " spec/atlas/size "(expected 256x58)"]
+print ["atlas:           " spec/atlas/size "(expected 256x55)"]
 print ["glyphs:          " length? spec/glyphs "(expected 318)"]
 print ["a map:           " map? spec/glyphs "(expected true)"]
 ;; Every ink pixel opaque - 255 - and nothing else: the alpha came through.
 ink: 0  other: 0
 foreach a spec/atlas/alpha [case [a = 255 [ink: ink + 1]  a <> 0 [other: other + 1]]]
-print ["ink pixels:      " ink "(expected 5175)"]
+print ["ink pixels:      " ink "(expected 4932)"]
 print ["half-opaque:     " other "(expected 0 - crisp)"]
 print ["white:           " spec/atlas/rgb/1 spec/atlas/rgb/2 spec/atlas/rgb/3 "(expected 255 255 255)"]
 print ["A is not a:      " not equal? select/case spec/glyphs #"A" select/case spec/glyphs #"a" "(expected true)"]
@@ -71,7 +71,7 @@ print ["text-size:       " text-size font "Cancel" "(expected 22x16)"]
 print ["two lines:       " text-size font "Cancel^/OK" "(expected 22x32 - the widest)"]
 print ["empty:           " text-size font "" "(expected 0x16 - one empty line)"]
 print ["trailing newline:" text-size font "OK^/" "(expected 8x32 - and an empty last line)"]
-print ["missing, boxed:  " text-size font "a漢b" "vs skipped" text-size bare "a漢b" "(the box's 6 more)"]
+print ["missing, boxed:  " text-size font "a漢b" "vs skipped" text-size bare "a漢b" "(the box's 4 more)"]
 
 ;;=============================================================================
 print as-yellow "^/== Text in a window"
@@ -120,6 +120,17 @@ skipped/font: bare
 skipped/tint: 150.150.150
 print ["another font:    " skipped/font == bare]
 
+;; Another font: Home Video, 20 px, monospaced - every character 12 wide -
+;; and capitals only: its lowercase is drawn the same, and stored once.
+video: make-font do %homevideo-20.reb
+print ["Home Video:      " mold video]
+print ["line height:     " video/line-height "(expected 18)"]
+print ["glyphs:          " video/glyphs "(expected 307)"]
+print ["monospaced:      " text-size video "OK" text-size video "WW" "(expected 24x18 both)"]
+caps: add-text window video "Home Video: OK" 200x186
+caps/tint: 150.255.150
+print ["textures:        " window/textures "(expected 2 - each font's atlas)"]
+
 ;; Faded and in colour.
 soft: add-text window font "tinted, at 60%" 12x190
 soft/tint: 120.200.255
@@ -145,13 +156,14 @@ center-label: does [
 center-label
 button/track?: true
 button/cursor: 'hand
-print ["textures:        " window/textures "(expected 2 - the atlas and the frame)"]
+print ["textures:        " window/textures "(expected 3 - the two atlases and the frame)"]
 
 print {
 WATCH: a Czech line; a big orange "Hello, Pugl!"; the same three lines
 centred and right-aligned; a pink line with arrows, a star and a Chinese
 character drawn as hollow boxes, and a grey one where they are skipped; a
-faded light blue line; a button. Hover the button - it lights up - and
+faded light blue line; a green "HOME VIDEO: OK" in the wider, capitals-only
+Home Video font; a button. Hover the button - it lights up - and
 click it: its label counts the clicks.
 Escape or the close button ends the test.
 }
