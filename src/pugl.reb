@@ -143,6 +143,7 @@ typedef struct Pugl_Node_Context {
 	// way only. nine 0 is plain scaling.
 	REBCNT  nine;
 	REBINT  nine_x, nine_y, nine_w, nine_h;
+	REBCNT  fill;    // W_PUGL_FILL_*, 0 for scale: how stretched pieces fill
 } PUGLNODE;
 }
 
@@ -157,6 +158,11 @@ words: [
 		add         ;; its colour added - lighter, light through light
 		multiply    ;; what is below multiplied by it - darker, like a filter
 		screen      ;; the inverse of multiply - lighter, never past white
+	]
+	;; How an image fills a size other than its own.
+	fill: [
+		scale       ;; stretched to it
+		tile        ;; repeated at its own size, as a pattern - the last ones cut
 	]
 	;; What `index` takes besides a number.
 	place: [
@@ -186,6 +192,7 @@ handles: [
 		"Pugl image handle - an image! shown in a window"
 		;NAME    GET       SET       DESCRIPTION
 		image    image!    image!    "The image shown - kept by reference: draw into it and call `redraw`"
+		fill     word!     word!     "How it fills a size other than its own - scale (default), or tile: repeated at its own size; with nine-scale, the edges and the middle"
 		nine-scale block!  [block! none!] "Scales it in nine pieces - [offset size] of the middle box, in its own pixels; the corners keep their size and the edges stretch one way only; none (default) scales it whole"
 		part     block!    [block! none!] "The part of the image shown - [offset size] in its pixels, a frame of an atlas; none (default) for all of it. Set, only the first two values are used, so a block of many parts can be walked"
 		offset   pair!     pair!     "Position of its top-left corner in the window - or in its group"

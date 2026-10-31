@@ -168,16 +168,56 @@ static void Nine_Axis(REBINT own, REBINT at, REBINT mid, REBINT drawn,
 	dst[0] = 0.0f;  dst[1] = lo;         dst[2] = (float)drawn - hi;  dst[3] = (float)drawn;
 }
 
+// More tiles than this along an axis, and that axis is scaled instead: a
+// pixel-sized tile over a big image would be millions of quads.
+#define PUGL_MAX_TILES 1024
+
 /***********************************************************************
-**  An image's quads, in its own units: one for the whole of it - or of
-**  its part - or nine when it is nine-scaled and the middle box still
-**  fits its own size. Texture coordinates are fractions of the whole
+**  One piece of an image, drawn from x0,y0 to x1,y1 (its units) from
+**  its own pixels s0..s1 (relative to bx,by in the image!) - scaled, or
+**  along an axis with `tile_*` repeated at its own size, the last tile
+**  cut. Emits quads into an open glBegin(GL_QUADS).
+***********************************************************************/
+static void Piece(float x0, float x1, float y0, float y1,
+                  float sx0, float sx1, float sy0, float sy1,
+                  REBOOL tile_x, REBOOL tile_y,
+                  REBINT bx, REBINT by, REBINT iw, REBINT ih)
+{
+	float sw = sx1 - sx0, sh = sy1 - sy0, x, y;
+
+	if (x1 <= x0 || y1 <= y0) return;
+	if (sw <= 0.0f || (x1 - x0) / sw > PUGL_MAX_TILES) tile_x = FALSE;
+	if (sh <= 0.0f || (y1 - y0) / sh > PUGL_MAX_TILES) tile_y = FALSE;
+
+	for (y = y0; y < y1; y += tile_y ? sh : (y1 - y0)) {
+		float ye = tile_y ? (y + sh < y1 ? y + sh : y1) : y1;
+		float v0 = (by + sy0) / ih;
+		float v1 = (by + (tile_y ? sy0 + (ye - y) : sy1)) / ih;
+		for (x = x0; x < x1; x += tile_x ? sw : (x1 - x0)) {
+			float xe = tile_x ? (x + sw < x1 ? x + sw : x1) : x1;
+			float u0 = (bx + sx0) / iw;
+			float u1 = (bx + (tile_x ? sx0 + (xe - x) : sx1)) / iw;
+			glTexCoord2f(u0, v0); glVertex2f(x,  y);
+			glTexCoord2f(u1, v0); glVertex2f(xe, y);
+			glTexCoord2f(u1, v1); glVertex2f(xe, ye);
+			glTexCoord2f(u0, v1); glVertex2f(x,  ye);
+		}
+	}
+}
+
+/***********************************************************************
+**  An image's quads, in its own units: the whole of it - or of its part
+**  - or nine pieces when it is nine-scaled and the middle box still fits
+**  its own size. With `fill: 'tile` what stretches is repeated instead:
+**  the whole image, or the edges along their length and the middle;
+**  corners never are. Texture coordinates are fractions of the whole
 **  image!; with GL_NEAREST an atlas frame's neighbours do not bleed in
 **  at whole-number scales.
 ***********************************************************************/
 static void Image_Quads(const PUGLNODE *im, REBINT iw, REBINT ih)
 {
 	REBINT ow, oh, dw, dh, bx = 0, by = 0;
+	REBOOL tile = (im->fill == W_PUGL_FILL_TILE);
 	float  sx[4], sy[4], dx[4], dy[4];
 	int    i, j;
 
@@ -192,27 +232,21 @@ static void Image_Quads(const PUGLNODE *im, REBINT iw, REBINT ih)
 		}
 	}
 
-	if (!im->nine || im->nine_x + im->nine_w > ow || im->nine_y + im->nine_h > oh) {
-		Quad_Of((float)dw, (float)dh,
-		        (float)bx / iw, (float)by / ih,
-		        (float)(bx + ow) / iw, (float)(by + oh) / ih);
-		return;
-	}
-
-	Nine_Axis(ow, im->nine_x, im->nine_w, dw, sx, dx);
-	Nine_Axis(oh, im->nine_y, im->nine_h, dh, sy, dy);
-
 	glBegin(GL_QUADS);
-	for (j = 0; j < 3; j++) {
-		float v0 = (by + sy[j]) / ih, v1 = (by + sy[j + 1]) / ih;
-		if (dy[j + 1] <= dy[j]) continue;
-		for (i = 0; i < 3; i++) {
-			float u0 = (bx + sx[i]) / iw, u1 = (bx + sx[i + 1]) / iw;
-			if (dx[i + 1] <= dx[i]) continue;
-			glTexCoord2f(u0, v0); glVertex2f(dx[i],     dy[j]);
-			glTexCoord2f(u1, v0); glVertex2f(dx[i + 1], dy[j]);
-			glTexCoord2f(u1, v1); glVertex2f(dx[i + 1], dy[j + 1]);
-			glTexCoord2f(u0, v1); glVertex2f(dx[i],     dy[j + 1]);
+	if (!im->nine || im->nine_x + im->nine_w > ow || im->nine_y + im->nine_h > oh) {
+		Piece(0.0f, (float)dw, 0.0f, (float)dh,
+		      0.0f, (float)ow, 0.0f, (float)oh,
+		      tile, tile, bx, by, iw, ih);
+	} else {
+		Nine_Axis(ow, im->nine_x, im->nine_w, dw, sx, dx);
+		Nine_Axis(oh, im->nine_y, im->nine_h, dh, sy, dy);
+		// The middle column stretches across, the middle row down.
+		for (j = 0; j < 3; j++) {
+			for (i = 0; i < 3; i++) {
+				Piece(dx[i], dx[i + 1], dy[j], dy[j + 1],
+				      sx[i], sx[i + 1], sy[j], sy[j + 1],
+				      tile && i == 1, tile && j == 1, bx, by, iw, ih);
+			}
 		}
 	}
 	glEnd();

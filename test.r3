@@ -708,15 +708,19 @@ print as-yellow "^/== Nine-scale"
 
 ;; Scaled in nine pieces, by the box of its middle - [offset size] in its
 ;; own pixels: the corners keep their size, the edges stretch one way only
-;; and the middle both ways. A frame: red corners, white edges 8 pixels
-;; wide, a blue middle.
+;; and the middle both ways. A frame: red corners, edges 8 pixels wide
+;; striped white and grey (so stretched and tiled differ), a blue middle.
 panel: make image! [24x24 40.60.200]
 repeat y 24 [
 	repeat x 24 [
 		edge-x: any [x <= 8  x > 16]
 		edge-y: any [y <= 8  y > 16]
 		if any [edge-x edge-y][
-			panel/(as-pair x y): either all [edge-x edge-y][255.0.0][255.255.255]
+			panel/(as-pair x y): case [
+				all [edge-x edge-y]  [255.0.0]
+				(x + y) % 4 < 2      [255.255.255]
+				true                 [150.150.150]
+			]
 		]
 	]
 ]
@@ -739,7 +743,8 @@ twin/nine-scale: none
 center-content
 
 ;; WATCH: over the big gradient, the frame grows wider and taller - its
-;; red corners stay 8x8 and its white edges only get longer; then it
+;; red corners stay 8x8 and its striped edges only get longer, the stripes
+;; stretched wider; then it
 ;; shrinks below the size of its corners, which shrink alike; then it
 ;; turns, still in nine pieces.
 repeat i 20 [box/size: as-pair 120 + (i * 4)  60 + (i * 2)  wait 0.02]
@@ -754,6 +759,33 @@ box/nine-scale: none  wait 0.5
 box/nine-scale: [8x8 8x8]
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+
+;; `fill` - how what stretches fills its size: scaled, or tiled - repeated
+;; at its own size, the last ones cut. With nine-scale only the edges, along
+;; their length, and the middle; never the corners.
+print ["fill:            " mold box/fill "(expected scale)"]
+box/fill: 'tile
+print ["set:             " mold box/fill "(expected tile)"]
+print ["a bad word:      " error? try [box/fill: 'round]]
+print ["a bad type:      " error? try [box/fill: none]]
+print ["of a group:      " error? try [grp/fill]]
+
+;; WATCH: the frame grows again, now its stripes keep their width - more of
+;; them, the last ones cut - while the corners stay as they were.
+repeat i 20 [box/size: as-pair 120 + (i * 4)  60 + (i * 2)  wait 0.02]
+box/size: 120x60
+
+;; A whole image tiled: one atlas frame as a pattern, 2.5 frames wide.
+pattern: add-image/size/part stage atlas 300x180 80x48 [0x0 32x32]
+pattern/fill: 'tile
+center-content
+;; WATCH: just above the white squares, partly over them, the first frame
+;; repeated - two and a
+;; half across, one and a half down; then stretched to the same size.
+wait 0.5
+pattern/fill: 'scale  wait 0.5
+pattern/fill: 'tile
+print ["pattern:         " pattern/size mold pattern/fill "(expected 80x48 tile)"]
 
 ;;=============================================================================
 print as-yellow "^/== An icon"

@@ -1195,6 +1195,7 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	switch (word) {
 	case W_PUGL_ARG_IMAGE:
 	case W_PUGL_ARG_PART:
+	case W_PUGL_ARG_FILL:
 	case W_PUGL_ARG_NINE_SCALE: return !n->group;
 	case W_PUGL_ARG_IMAGES:  return n->group ? TRUE : FALSE;
 	case W_PUGL_ARG_SIZE:
@@ -1348,6 +1349,11 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		      ? RXT_BLOCK : RXT_NONE;
 		break;
 
+	case W_PUGL_ARG_FILL:
+		arg->int32a = (int)Pugl_fill_words[im->fill ? im->fill : W_PUGL_FILL_SCALE];
+		*type = RXT_WORD;
+		break;
+
 	case W_PUGL_ARG_NINE_SCALE:
 		*type = (im->nine && Box_Block(im->nine_x, im->nine_y, im->nine_w, im->nine_h, arg))
 		      ? RXT_BLOCK : RXT_NONE;
@@ -1466,6 +1472,14 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		else return PE_BAD_SET_TYPE;
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
+		break; }
+
+	case W_PUGL_ARG_FILL: {
+		REBCNT mode;
+		if (*type != RXT_WORD) return PE_BAD_SET_TYPE;
+		mode = RL_FIND_WORD(Pugl_fill_words, (REBCNT)arg->int32a);
+		if (!mode) return PE_BAD_SET;
+		im->fill = mode;
 		break; }
 
 	// The middle box, inside its own size as it is now - a middle of zero
