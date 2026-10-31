@@ -760,19 +760,28 @@ box/nine-scale: [8x8 8x8]
 center-content
 print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
 
-;; `fill` - how what stretches fills its size: scaled, or tiled - repeated
-;; at its own size, the last ones cut. With nine-scale only the edges, along
-;; their length, and the middle; never the corners.
+;; `fill` - how what stretches fills its size: scaled; tiled - repeated
+;; at its own size, the last ones cut; or rounded - repeated a whole number
+;; of times, each scaled a little to fit. With nine-scale only the edges,
+;; along their length, and the middle; never the corners.
 print ["fill:            " mold box/fill "(expected scale)"]
 box/fill: 'tile
 print ["set:             " mold box/fill "(expected tile)"]
-print ["a bad word:      " error? try [box/fill: 'round]]
+box/fill: 'round
+print ["round:           " mold box/fill "(expected round)"]
+box/fill: 'tile
+print ["a bad word:      " error? try [box/fill: 'repeat]]
 print ["a bad type:      " error? try [box/fill: none]]
 print ["of a group:      " error? try [grp/fill]]
 
 ;; WATCH: the frame grows again, now its stripes keep their width - more of
 ;; them, the last ones cut - while the corners stay as they were.
 repeat i 20 [box/size: as-pair 120 + (i * 4)  60 + (i * 2)  wait 0.02]
+;; WATCH: and rounded - the stripes never cut, only a little wider or
+;; narrower, one more of them whenever there is room.
+box/fill: 'round
+repeat i 20 [box/size: as-pair 200 - (i * 4)  100 - (i * 2)  wait 0.02]
+box/fill: 'tile
 box/size: 120x60
 
 ;; A whole image tiled: one atlas frame as a pattern, 2.5 frames wide.
@@ -784,6 +793,8 @@ center-content
 ;; half across, one and a half down; then stretched to the same size.
 wait 0.5
 pattern/fill: 'scale  wait 0.5
+;; WATCH: rounded - three whole frames across, two down, each squeezed.
+pattern/fill: 'round  wait 0.5
 pattern/fill: 'tile
 print ["pattern:         " pattern/size mold pattern/fill "(expected 80x48 tile)"]
 

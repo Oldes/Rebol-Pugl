@@ -173,30 +173,59 @@ static void Nine_Axis(REBINT own, REBINT at, REBINT mid, REBINT drawn,
 #define PUGL_MAX_TILES 1024
 
 /***********************************************************************
+**  How many times a source of `src` repeats over `dst` - or 0 for not
+**  at all (scaled): `tile` as many as start inside, the last one cut;
+**  `round` the nearest whole number, at least one, each scaled to fit.
+***********************************************************************/
+static REBINT Repeats(REBCNT mode, float dst, float src)
+{
+	float n;
+	if (src <= 0.0f || dst <= 0.0f) return 0;
+	n = dst / src;
+	if (n > PUGL_MAX_TILES) return 0;
+	if (mode == W_PUGL_FILL_TILE)  return (REBINT)ceil(n);
+	if (mode == W_PUGL_FILL_ROUND) return n < 1.5f ? 1 : (REBINT)(n + 0.5f);
+	return 0;
+}
+
+/***********************************************************************
 **  One piece of an image, drawn from x0,y0 to x1,y1 (its units) from
 **  its own pixels s0..s1 (relative to bx,by in the image!) - scaled, or
-**  along an axis with `tile_*` repeated at its own size, the last tile
-**  cut. Emits quads into an open glBegin(GL_QUADS).
+**  along an axis repeated by its `mode_*` fill: tiled at its own size,
+**  the last tile cut, or rounded to a whole number of tiles scaled to
+**  fit. Emits quads into an open glBegin(GL_QUADS).
 ***********************************************************************/
 static void Piece(float x0, float x1, float y0, float y1,
                   float sx0, float sx1, float sy0, float sy1,
-                  REBOOL tile_x, REBOOL tile_y,
+                  REBCNT mode_x, REBCNT mode_y,
                   REBINT bx, REBINT by, REBINT iw, REBINT ih)
 {
-	float sw = sx1 - sx0, sh = sy1 - sy0, x, y;
+	float  sw = sx1 - sx0, sh = sy1 - sy0;
+	REBINT nx, ny, i, j;
+	float  stepx, stepy;   // a tile as drawn
+	REBOOL cutx, cuty;     // the last tile is cut, not scaled
 
 	if (x1 <= x0 || y1 <= y0) return;
-	if (sw <= 0.0f || (x1 - x0) / sw > PUGL_MAX_TILES) tile_x = FALSE;
-	if (sh <= 0.0f || (y1 - y0) / sh > PUGL_MAX_TILES) tile_y = FALSE;
+	nx = Repeats(mode_x, x1 - x0, sw);
+	ny = Repeats(mode_y, y1 - y0, sh);
+	cutx  = nx && mode_x == W_PUGL_FILL_TILE;
+	cuty  = ny && mode_y == W_PUGL_FILL_TILE;
+	stepx = nx ? (cutx ? sw : (x1 - x0) / nx) : (x1 - x0);
+	stepy = ny ? (cuty ? sh : (y1 - y0) / ny) : (y1 - y0);
+	if (!nx) nx = 1;
+	if (!ny) ny = 1;
 
-	for (y = y0; y < y1; y += tile_y ? sh : (y1 - y0)) {
-		float ye = tile_y ? (y + sh < y1 ? y + sh : y1) : y1;
+	for (j = 0; j < ny; j++) {
+		float y  = y0 + j * stepy;
+		float ye = (j == ny - 1) ? y1 : y + stepy;
 		float v0 = (by + sy0) / ih;
-		float v1 = (by + (tile_y ? sy0 + (ye - y) : sy1)) / ih;
-		for (x = x0; x < x1; x += tile_x ? sw : (x1 - x0)) {
-			float xe = tile_x ? (x + sw < x1 ? x + sw : x1) : x1;
+		// Only a cut tile shows less than all of its source.
+		float v1 = (by + (cuty ? sy0 + (ye - y) : sy1)) / ih;
+		for (i = 0; i < nx; i++) {
+			float x  = x0 + i * stepx;
+			float xe = (i == nx - 1) ? x1 : x + stepx;
 			float u0 = (bx + sx0) / iw;
-			float u1 = (bx + (tile_x ? sx0 + (xe - x) : sx1)) / iw;
+			float u1 = (bx + (cutx ? sx0 + (xe - x) : sx1)) / iw;
 			glTexCoord2f(u0, v0); glVertex2f(x,  y);
 			glTexCoord2f(u1, v0); glVertex2f(xe, y);
 			glTexCoord2f(u1, v1); glVertex2f(xe, ye);
@@ -208,7 +237,7 @@ static void Piece(float x0, float x1, float y0, float y1,
 /***********************************************************************
 **  An image's quads, in its own units: the whole of it - or of its part
 **  - or nine pieces when it is nine-scaled and the middle box still fits
-**  its own size. With `fill: 'tile` what stretches is repeated instead:
+**  its own size. With `fill` tile or round, what stretches is repeated:
 **  the whole image, or the edges along their length and the middle;
 **  corners never are. Texture coordinates are fractions of the whole
 **  image!; with GL_NEAREST an atlas frame's neighbours do not bleed in
@@ -217,7 +246,7 @@ static void Piece(float x0, float x1, float y0, float y1,
 static void Image_Quads(const PUGLNODE *im, REBINT iw, REBINT ih)
 {
 	REBINT ow, oh, dw, dh, bx = 0, by = 0;
-	REBOOL tile = (im->fill == W_PUGL_FILL_TILE);
+	REBCNT mode = im->fill;   // 0 and W_PUGL_FILL_SCALE both scale
 	float  sx[4], sy[4], dx[4], dy[4];
 	int    i, j;
 
@@ -236,7 +265,7 @@ static void Image_Quads(const PUGLNODE *im, REBINT iw, REBINT ih)
 	if (!im->nine || im->nine_x + im->nine_w > ow || im->nine_y + im->nine_h > oh) {
 		Piece(0.0f, (float)dw, 0.0f, (float)dh,
 		      0.0f, (float)ow, 0.0f, (float)oh,
-		      tile, tile, bx, by, iw, ih);
+		      mode, mode, bx, by, iw, ih);
 	} else {
 		Nine_Axis(ow, im->nine_x, im->nine_w, dw, sx, dx);
 		Nine_Axis(oh, im->nine_y, im->nine_h, dh, sy, dy);
@@ -245,7 +274,7 @@ static void Image_Quads(const PUGLNODE *im, REBINT iw, REBINT ih)
 			for (i = 0; i < 3; i++) {
 				Piece(dx[i], dx[i + 1], dy[j], dy[j + 1],
 				      sx[i], sx[i + 1], sy[j], sy[j + 1],
-				      tile && i == 1, tile && j == 1, bx, by, iw, ih);
+				      i == 1 ? mode : 0, j == 1 ? mode : 0, bx, by, iw, ih);
 			}
 		}
 	}

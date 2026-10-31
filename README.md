@@ -120,7 +120,7 @@ Makes a group in a window or a group and returns its handle
 ```rebol
 ;Refinement       Gets                Sets                          Description
 /image            image!              image!                        "The image shown - kept by reference: draw into it and call `redraw`"
-/fill             word!               word!                         "How it fills a size other than its own - scale (default), or tile: repeated at its own size; with nine-scale, the edges and the middle"
+/fill             word!               word!                         "How it fills a size other than its own - scale (default); tile: repeated at its own size, the last ones cut; round: repeated a whole number of times, each scaled to fit; with nine-scale, the edges and the middle"
 /nine-scale       block!              [block! none!]                "Scales it in nine pieces - [offset size] of the middle box, in its own pixels; the corners keep their size and the edges stretch one way only; none (default) scales it whole"
 /part             block!              [block! none!]                "The part of the image shown - [offset size] in its pixels, a frame of an atlas; none (default) for all of it. Set, only the first two values are used, so a block of many parts can be walked"
 /offset           pair!               pair!                         "Position of its top-left corner in the window - or in its group"
