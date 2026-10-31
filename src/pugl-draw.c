@@ -173,6 +173,11 @@ static void Nine_Axis(REBINT own, REBINT at, REBINT mid, REBINT drawn,
 // pixel-sized tile over a big image would be millions of quads.
 #define PUGL_MAX_TILES 1024
 
+// How far a piece's texture coordinates are pulled in from its borders, in
+// texels: enough that rounding never reaches the neighbouring texel, far
+// too little to be seen.
+#define PUGL_TEXEL_INSET (1.0f / 512.0f)
+
 /***********************************************************************
 **  How many times a source of `src` repeats over `dst` - or 0 for not
 **  at all (scaled): `tile` as many as start inside, the last one cut;
@@ -216,23 +221,33 @@ static void Piece(float x0, float x1, float y0, float y1,
 	if (!nx) nx = 1;
 	if (!ny) ny = 1;
 
+	// Where tile `i` starts - one formula for both tiles sharing an edge,
+	// so they share it to the last bit: GL leaves no gap between edges
+	// only when they are the very same coordinates. The last ends at the
+	// piece's end.
+#define EDGE(o, step, n, end, i) ((i) >= (n) ? (end) : (o) + (float)(i) * (step))
+
 	for (j = 0; j < ny; j++) {
-		float y  = y0 + j * stepy;
-		float ye = (j == ny - 1) ? y1 : y + stepy;
-		float v0 = (by + sy0) / ih;
-		// Only a cut tile shows less than all of its source.
-		float v1 = (by + (cuty ? sy0 + (ye - y) : sy1)) / ih;
+		float y  = EDGE(y0, stepy, ny, y1, j);
+		float ye = EDGE(y0, stepy, ny, y1, j + 1);
+		// Only a cut tile shows less than all of its source. Pulled in by
+		// a fraction of a texel, so that a pixel whose centre falls right
+		// on the piece's border - or rounds past it - takes this piece's
+		// texel, not the neighbour's (the next piece of the image).
+		float v0 = (by + sy0 + PUGL_TEXEL_INSET) / ih;
+		float v1 = (by + (cuty ? sy0 + (ye - y) : sy1) - PUGL_TEXEL_INSET) / ih;
 		for (i = 0; i < nx; i++) {
-			float x  = x0 + i * stepx;
-			float xe = (i == nx - 1) ? x1 : x + stepx;
-			float u0 = (bx + sx0) / iw;
-			float u1 = (bx + (cutx ? sx0 + (xe - x) : sx1)) / iw;
+			float x  = EDGE(x0, stepx, nx, x1, i);
+			float xe = EDGE(x0, stepx, nx, x1, i + 1);
+			float u0 = (bx + sx0 + PUGL_TEXEL_INSET) / iw;
+			float u1 = (bx + (cutx ? sx0 + (xe - x) : sx1) - PUGL_TEXEL_INSET) / iw;
 			glTexCoord2f(u0, v0); glVertex2f(x,  y);
 			glTexCoord2f(u1, v0); glVertex2f(xe, y);
 			glTexCoord2f(u1, v1); glVertex2f(xe, ye);
 			glTexCoord2f(u0, v1); glVertex2f(x,  ye);
 		}
 	}
+#undef EDGE
 }
 
 /***********************************************************************
@@ -439,6 +454,10 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 {
 	PuglArea area = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
 	REBCNT   n;
+	// Everything in units, drawn this many device pixels per unit - the
+	// one set with `window/scale:`, or the screen's, 2 on a Retina display.
+	double    k = pv->scale > 0.0 ? pv->scale : puglGetScaleFactor(view);
+	PUGLXFORM root;
 
 	glViewport(0, 0, area.width, area.height);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -467,7 +486,11 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 	glStencilFunc(GL_EQUAL, 0, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 
-	Draw_List(pv, (PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, White, W_PUGL_BLEND_NORMAL,
+	if (k <= 0.0) k = 1.0;
+	root = Pugl_Identity;
+	root.a = k;
+	root.d = k;
+	Draw_List(pv, (PUGLNODE*)pv->images, &root, 1.0f, White, W_PUGL_BLEND_NORMAL,
 	          W_PUGL_FILTER_NEAREST, 0,
 	          (float)area.width, (float)area.height);
 

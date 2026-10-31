@@ -70,8 +70,11 @@ typedef struct Pugl_Window_Context {
 	REBHOB *hob;    // back reference, so queued events can name their source
 	void   *next;   // next open view (PUGLWIN*), so they can all be
 	                // closed before the world is freed
-	REBINT  x, y;   // position and size last reported - Pugl sends one
-	REBINT  w, h;   // `configure` for both, Rebol has `offset` and `resize`
+	REBINT  x, y;   // position and size, device pixels, as pugl last said -
+	REBINT  w, h;   // one `configure` for both
+	REBINT  ux, uy; // ... and in units, as last reported - Rebol has
+	REBINT  uw, uh; // `offset` and `resize`, sent when these change
+	double  scale;  // device pixels per unit set with `scale:`; 0 for the screen's
 
 	// The native icon objects, where a platform keeps any (Windows: the
 	// big and the small HICON). The image! itself is in hob->series.
@@ -213,9 +216,9 @@ handles: [
 		"Pugl window handle - a top-level window with an OpenGL view"
 		;NAME    GET       SET       DESCRIPTION
 		title    string!   string!   "Text shown in the title bar"
-		size     pair!     pair!     "Size of the window"
-		offset   pair!     pair!     "Position of the top-left corner on the screen"
-		scale    decimal!  none      "Scale factor - 1.0 at standard DPI, 2.0 on a Retina display"
+		size     pair!     pair!     "Size of the window, in units"
+		offset   pair!     pair!     "Position of the top-left corner on the screen, in units"
+		scale    decimal!  [decimal! integer! none!] "Device pixels per unit - the screen's, 1.0 at standard DPI and 2.0 on a Retina display, until set (up to 16); none follows the screen again. Everything is in units: sizes, offsets, events, images - drawn this many times bigger. Setting it zooms: the window keeps its size on the screen, so its size in units changes, reported as `resize`"
 		id       integer!  none      "Native view handle (HWND / NSView* / X11 Window) as an integer"
 		visible? logic!    none      "Whether the window is currently visible"
 		open?    logic!    none      "False once the window has been closed"
@@ -276,9 +279,9 @@ handles: [
 commands: [
 	open-window: [
 		"Creates a top-level window and returns its handle"
-		size [pair!] "Size of the window"
+		size [pair!] "Size of the window, in units - device pixels / scale"
 		/title text [string!] "Text shown in the title bar"
-		/at offset [pair!] "Position of the top-left corner on the screen"
+		/at offset [pair!] "Position of the top-left corner on the screen, in units"
 		/hidden "Creates the window without showing it"
 		/fixed  "The user cannot resize it"
 	]

@@ -389,13 +389,44 @@ static REBOOL Set_Window_Icon(PUGLWIN *pv, RXIARG *arg)
 	return TRUE;
 }
 
+/***********************************************************************
+**  Units and device pixels.
+**
+**  Pugl works in device pixels throughout - sizes, positions, pointer
+**  coordinates; Rebol, as in Rebol-GUI, in units: pixels / scale, the
+**  scale being the screen's, as pugl says now (2.0 on a Retina display).
+**  So everything is converted where it crosses: sizes and positions at
+**  the pugl calls, pointer coordinates as events are converted, and the
+**  drawing is scaled as a whole (Pugl_Draw).
+***********************************************************************/
+// The screen's scale, as pugl says now.
+static double Screen_Scale(PuglView *view)
+{
+	double k = view ? puglGetScaleFactor(view) : 1.0;
+	return k > 0.0 ? k : 1.0;
+}
+
+// The window's: the one set with `window/scale:`, or else its screen's.
+static double Scale_Of(PUGLWIN *pv)
+{
+	return pv->scale > 0.0 ? pv->scale : Screen_Scale((PuglView*)pv->view);
+}
+
+// A size or a position in units - to the nearest.
+static REBINT To_Units(double px, double k)    { return (REBINT)floor(px / k + 0.5); }
+// ... and back, in device pixels.
+static REBINT To_Pixels(double units, double k) { return (REBINT)floor(units * k + 0.5); }
+
 static void Remember_Frame(PUGLWIN *pv)
 {
 	PuglView *view = (PuglView*)pv->view;
 	PuglPoint p = puglGetPositionHint(view, PUGL_CURRENT_POSITION);
 	PuglArea  a = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
+	double    k = Scale_Of(pv);
 	pv->x = p.x; pv->y = p.y;
 	pv->w = a.width; pv->h = a.height;
+	pv->ux = To_Units(p.x, k);     pv->uy = To_Units(p.y, k);
+	pv->uw = To_Units(a.width, k); pv->uh = To_Units(a.height, k);
 }
 
 /***********************************************************************
@@ -619,11 +650,14 @@ static void Enter_Chain(REBSER *blk, REBCNT *at, PUGLNODE *n, PUGLNODE *was,
 **  stays still is not entered until the pointer moves.
 ***********************************************************************/
 static void Hover_To(REBSER *blk, REBCNT *at, PUGLWIN *win,
-                     REBINT x, REBINT y, REBOOL inside)
+                     double fx, double fy, REBOOL inside)
 {
-	PUGLNODE *now = inside ? Image_At((PUGLNODE*)win->images, (double)x, (double)y) : NULL;
+	// Hit at the unit fraction - finer than the reported whole units, so
+	// on a Retina display an edge is found to its device pixel.
+	PUGLNODE *now = inside ? Image_At((PUGLNODE*)win->images, fx, fy) : NULL;
 	PUGLNODE *was = (PUGLNODE*)win->hover;
 	PUGLNODE *n;
+	REBINT    x = (REBINT)floor(fx), y = (REBINT)floor(fy);
 
 	if (now != was) {
 		for (n = was; n && !In_Chain(now, n); n = (PUGLNODE*)n->parent) {
@@ -710,6 +744,12 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 {
 	PUGLWIN         *pv = q->ctx;
 	const PuglEvent *e  = &q->event;
+	double           k  = Scale_Of(pv);   // device pixels per unit
+
+	// A pointer coordinate in units: the fraction for the hit test, and the
+	// whole unit it is in for the event.
+#define U(v)  ((double)(v) / k)
+#define UI(v) ((REBINT)floor((double)(v) / k))
 
 	switch (e->type) {
 	case PUGL_BUTTON_PRESS:
@@ -719,7 +759,7 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		if (e->button.button > 2) break;
 		if (e->type == PUGL_BUTTON_PRESS) pv->buttons |=  (1u << e->button.button);
 		else                              pv->buttons &= ~(1u << e->button.button);
-		Hover_To(blk, at, pv, (REBINT)e->button.x, (REBINT)e->button.y, TRUE);
+		Hover_To(blk, at, pv, U(e->button.x), U(e->button.y), TRUE);
 		// The first press takes the pointer for what is tracked under it;
 		// the others, and every release, go where that one went.
 		if (e->type == PUGL_BUTTON_PRESS && !held)
@@ -727,7 +767,7 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		Append_Event_Of(blk, at, Source_Of(pv, (PUGLNODE*)pv->capture),
 			(e->type == PUGL_BUTTON_PRESS ? Down_Types : Up_Types)[e->button.button],
 			HAS_XY | Modifier_Bits(e->button.state),
-			XY_DATA(e->button.x, e->button.y));
+			XY_DATA(UI(e->button.x), UI(e->button.y)));
 		if (!pv->buttons) pv->capture = NULL;
 		break; }
 
@@ -739,27 +779,27 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		if (!pv->buttons
 		 && (e->motion.x < 0 || e->motion.y < 0
 		  || e->motion.x >= pv->w || e->motion.y >= pv->h)) break;
-		Hover_To(blk, at, pv, (REBINT)e->motion.x, (REBINT)e->motion.y, TRUE);
+		Hover_To(blk, at, pv, U(e->motion.x), U(e->motion.y), TRUE);
 		// A drag comes from what took the press; any other move from the
 		// window - hovering is `enter` and `leave`.
 		Append_Event_Of(blk, at, Source_Of(pv, pv->buttons ? (PUGLNODE*)pv->capture : NULL),
 			EVT_MOVE,
 			HAS_XY | Modifier_Bits(e->motion.state),
-			XY_DATA(e->motion.x, e->motion.y));
+			XY_DATA(UI(e->motion.x), UI(e->motion.y)));
 		break;
 
 	// The window's own enter goes before an image's, and its leave after:
 	// the pointer is inside the window whenever it is over an image.
 	case PUGL_POINTER_IN:
 		Append_Event(blk, at, pv, EVT_ENTER,
-			HAS_XY, XY_DATA(e->crossing.x, e->crossing.y));
-		Hover_To(blk, at, pv, (REBINT)e->crossing.x, (REBINT)e->crossing.y, TRUE);
+			HAS_XY, XY_DATA(UI(e->crossing.x), UI(e->crossing.y)));
+		Hover_To(blk, at, pv, U(e->crossing.x), U(e->crossing.y), TRUE);
 		break;
 
 	case PUGL_POINTER_OUT:
-		Hover_To(blk, at, pv, (REBINT)e->crossing.x, (REBINT)e->crossing.y, FALSE);
+		Hover_To(blk, at, pv, U(e->crossing.x), U(e->crossing.y), FALSE);
 		Append_Event(blk, at, pv, EVT_LEAVE,
-			HAS_XY, XY_DATA(e->crossing.x, e->crossing.y));
+			HAS_XY, XY_DATA(UI(e->crossing.x), UI(e->crossing.y)));
 		break;
 
 	case PUGL_SCROLL: {
@@ -809,15 +849,21 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 
 	case PUGL_CONFIGURE: {
 		const PuglConfigureEvent *c = &e->configure;
-		if (c->width != pv->w || c->height != pv->h) {
-			pv->w = c->width;
-			pv->h = c->height;
-			Append_Event(blk, at, pv, EVT_RESIZE, HAS_XY, XY_DATA(c->width, c->height));
+		// In units: moved to a screen of another scale, the same window
+		// is another size in units - which is a `resize` too.
+		REBINT uw = To_Units(c->width, k),  uh = To_Units(c->height, k);
+		REBINT ux = To_Units(c->x, k),      uy = To_Units(c->y, k);
+		pv->x = c->x;     pv->y = c->y;
+		pv->w = c->width; pv->h = c->height;
+		if (uw != pv->uw || uh != pv->uh) {
+			pv->uw = uw;
+			pv->uh = uh;
+			Append_Event(blk, at, pv, EVT_RESIZE, HAS_XY, XY_DATA(uw, uh));
 		}
-		if (c->x != pv->x || c->y != pv->y) {
-			pv->x = c->x;
-			pv->y = c->y;
-			Append_Event(blk, at, pv, EVT_OFFSET, HAS_XY, XY_DATA(c->x, c->y));
+		if (ux != pv->ux || uy != pv->uy) {
+			pv->ux = ux;
+			pv->uy = uy;
+			Append_Event(blk, at, pv, EVT_OFFSET, HAS_XY, XY_DATA(ux, uy));
 		}
 		break; }
 
@@ -835,6 +881,8 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 	default:
 		break;
 	}
+#undef U
+#undef UI
 }
 
 
@@ -852,6 +900,7 @@ COMMAND cmd_pugl_open_window(RXIFRM *frm, void *ctx)
 	PuglView    *view;
 	REBINT       w = (REBINT)RXA_PAIR(frm, 1).x;
 	REBINT       h = (REBINT)RXA_PAIR(frm, 1).y;
+	double       k;
 
 	if (w <= 0 || h <= 0 || w > 10000 || h > 10000) RETURN_ERROR(ERR_BAD_SIZE);
 	if (!Pugl_World) RETURN_ERROR(ERR_NO_WORLD);
@@ -870,13 +919,17 @@ COMMAND cmd_pugl_open_window(RXIFRM *frm, void *ctx)
 	puglSetHandle(view, pv);
 	Pugl_Setup_Backend(view);
 	puglSetEventFunc(view, Pugl_On_Event);
-	puglSetSizeHint(view, PUGL_DEFAULT_SIZE, (unsigned)w, (unsigned)h);
+	// In units, so in device pixels at the scale of the screen it will be
+	// on - as well as pugl can tell before it is there; checked again once
+	// it is, below.
+	k = Screen_Scale(view);
+	puglSetSizeHint(view, PUGL_DEFAULT_SIZE, (unsigned)To_Pixels(w, k), (unsigned)To_Pixels(h, k));
 	puglSetViewHint(view, PUGL_RESIZABLE, RXA_REF(frm, 7) ? PUGL_FALSE : PUGL_TRUE);
 
 	if (RXA_REF(frm, 2)) Set_Window_Title(view, RXA_SERIES(frm, 3), RXA_INDEX(frm, 3));
 	if (RXA_REF(frm, 4)) {
 		puglSetPositionHint(view, PUGL_DEFAULT_POSITION,
-			(int)RXA_PAIR(frm, 5).x, (int)RXA_PAIR(frm, 5).y);
+			To_Pixels(RXA_PAIR(frm, 5).x, k), To_Pixels(RXA_PAIR(frm, 5).y, k));
 	}
 
 	if (puglRealize(view) != PUGL_SUCCESS) {
@@ -885,6 +938,13 @@ COMMAND cmd_pugl_open_window(RXIFRM *frm, void *ctx)
 		Pugl_Purge_Events(pv);
 		RL_FREE_HANDLE_CONTEXT(hob);
 		RETURN_ERROR(ERR_NO_WINDOW);
+	}
+
+	// Realized on a screen of another scale than guessed: made the size
+	// asked for, in units, there.
+	if (Screen_Scale(view) != k) {
+		k = Screen_Scale(view);
+		puglSetSizeHint(view, PUGL_CURRENT_SIZE, (unsigned)To_Pixels(w, k), (unsigned)To_Pixels(h, k));
 	}
 
 	pv->view = view;
@@ -1226,20 +1286,22 @@ int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 
 	case W_PUGL_ARG_SIZE: {
 		PuglArea a = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
-		arg->pair.x = (float)a.width;
-		arg->pair.y = (float)a.height;
+		double   k = Scale_Of(pv);
+		arg->pair.x = (float)To_Units(a.width, k);
+		arg->pair.y = (float)To_Units(a.height, k);
 		*type = RXT_PAIR;
 		break; }
 
 	case W_PUGL_ARG_OFFSET: {
 		PuglPoint p = puglGetPositionHint(view, PUGL_CURRENT_POSITION);
-		arg->pair.x = (float)p.x;
-		arg->pair.y = (float)p.y;
+		double    k = Scale_Of(pv);
+		arg->pair.x = (float)To_Units(p.x, k);
+		arg->pair.y = (float)To_Units(p.y, k);
 		*type = RXT_PAIR;
 		break; }
 
 	case W_PUGL_ARG_SCALE:
-		arg->dec64 = puglGetScaleFactor(view);
+		arg->dec64 = Scale_Of(pv);
 		*type = RXT_DECIMAL;
 		break;
 
@@ -1314,14 +1376,16 @@ int PuglWindow_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (arg->pair.x < 1 || arg->pair.y < 1
 		 || arg->pair.x > 10000 || arg->pair.y > 10000) return PE_BAD_RANGE;
 		if (puglSetSizeHint(view, PUGL_CURRENT_SIZE,
-		        (unsigned)arg->pair.x, (unsigned)arg->pair.y) != PUGL_SUCCESS)
+		        (unsigned)To_Pixels(arg->pair.x, Scale_Of(pv)),
+		        (unsigned)To_Pixels(arg->pair.y, Scale_Of(pv))) != PUGL_SUCCESS)
 			return PE_BAD_SET;
 		break;
 
 	case W_PUGL_ARG_OFFSET:
 		if (*type != RXT_PAIR) return PE_BAD_SET_TYPE;
 		if (puglSetPositionHint(view, PUGL_CURRENT_POSITION,
-		        (int)arg->pair.x, (int)arg->pair.y) != PUGL_SUCCESS)
+		        To_Pixels(arg->pair.x, Scale_Of(pv)),
+		        To_Pixels(arg->pair.y, Scale_Of(pv))) != PUGL_SUCCESS)
 			return PE_BAD_SET;
 		break;
 
@@ -1329,6 +1393,34 @@ int PuglWindow_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		REBCNT w = Cursor_Word(type, arg);
 		if (!w) return *type == RXT_WORD ? PE_BAD_SET : PE_BAD_SET_TYPE;
 		pv->cursor = w;
+		Update_Cursor(pv);
+		break; }
+
+	// A zoom: the window keeps its size on the screen, all in it is drawn
+	// at the new scale - so its size in units changes. A configure is
+	// queued for it, as if pugl had sent one, so that it is reported as
+	// a `resize`, the same as any other change of the size in units.
+	case W_PUGL_ARG_SCALE: {
+		double    k;
+		PuglEvent ev;
+		PuglArea  a;
+		PuglPoint p;
+		if      (*type == RXT_NONE)    k = 0.0;
+		else if (*type == RXT_DECIMAL) k = arg->dec64;
+		else if (*type == RXT_INTEGER) k = (double)arg->int64;
+		else return PE_BAD_SET_TYPE;
+		if (*type != RXT_NONE && (k <= 0.0 || k > 16.0)) return PE_BAD_RANGE;
+		pv->scale = k;
+
+		a = puglGetSizeHint(view, PUGL_CURRENT_SIZE);
+		p = puglGetPositionHint(view, PUGL_CURRENT_POSITION);
+		memset(&ev, 0, sizeof(ev));
+		ev.configure.type   = PUGL_CONFIGURE;
+		ev.configure.x      = p.x;
+		ev.configure.y      = p.y;
+		ev.configure.width  = a.width;
+		ev.configure.height = a.height;
+		Pugl_On_Event(view, &ev);   // queued, and the view redrawn
 		Update_Cursor(pv);
 		break; }
 
@@ -1358,9 +1450,10 @@ int PuglWindow_mold(REBHOB *hob, REBSER *str)
 	SERIES_TAIL(str) = 0;
 	if (pv->view) {
 		PuglArea a = puglGetSizeHint((PuglView*)pv->view, PUGL_CURRENT_SIZE);
+		double   k = Scale_Of(pv);
 		APPEND_STRING(str, "0#%lx %dx%d",
 			(unsigned long)puglGetNativeView((PuglView*)pv->view),
-			(int)a.width, (int)a.height);
+			(int)To_Units(a.width, k), (int)To_Units(a.height, k));
 	} else {
 		APPEND_STRING(str, "%s", "closed");
 	}

@@ -7,8 +7,8 @@
 !/test
 !/*.nest
 !/Entitlements.plist
-!/ci-test.r3
-!/test.r3
+!/*.r3
+!/*.reb
 !/*.md
 */gen-*
 !/make-*.r3

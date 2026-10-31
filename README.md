@@ -48,11 +48,11 @@ pugl: import %pugl.rebx
 
 #### `open-window` `:size`
 Creates a top-level window and returns its handle
-* `size` `[pair!]` Size of the window
+* `size` `[pair!]` Size of the window, in units - device pixels / scale
 * `/title`
 * `text` `[string!]` Text shown in the title bar
 * `/at`
-* `offset` `[pair!]` Position of the top-left corner on the screen
+* `offset` `[pair!]` Position of the top-left corner on the screen, in units
 * `/hidden` Creates the window without showing it
 * `/fixed` The user cannot resize it
 
@@ -109,9 +109,9 @@ The topmost visible image at a point of the window, or none - where it is drawn,
 ```rebol
 ;Refinement       Gets                Sets                          Description
 /title            string!             string!                       "Text shown in the title bar"
-/size             pair!               pair!                         "Size of the window"
-/offset           pair!               pair!                         "Position of the top-left corner on the screen"
-/scale            decimal!            none                          "Scale factor - 1.0 at standard DPI, 2.0 on a Retina display"
+/size             pair!               pair!                         "Size of the window, in units"
+/offset           pair!               pair!                         "Position of the top-left corner on the screen, in units"
+/scale            decimal!            [decimal! integer! none!]     "Device pixels per unit - the screen's, 1.0 at standard DPI and 2.0 on a Retina display, until set (up to 16); none follows the screen again. Everything is in units: sizes, offsets, events, images - drawn this many times bigger. Setting it zooms: the window keeps its size on the screen, so its size in units changes, reported as `resize`"
 /id               integer!            none                          "Native view handle (HWND / NSView* / X11 Window) as an integer"
 /visible?         logic!              none                          "Whether the window is currently visible"
 /open?            logic!              none                          "False once the window has been closed"

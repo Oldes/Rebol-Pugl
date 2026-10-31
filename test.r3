@@ -38,7 +38,10 @@ print ["visible?: " window/visible? "(expected false)"]
 print ["title:    " mold window/title {(expected "Rebol Pugl extension")}]
 print ["size:     " window/size "(expected 480x320)"]
 print ["offset:   " window/offset]
-print ["scale:    " window/scale "(sizes and offsets are in device pixels)"]
+print ["scale:    " window/scale "(device pixels per unit - 2.0 on a Retina display)"]
+;; Everything is in units - device pixels / scale: the size asked for is the
+;; size read back, whatever the screen.
+print ["in units: " window/size = 480x320 "(expected true, at any scale)"]
 
 ;; every accessor which can be read can also be written, except
 ;; scale, id, visible? and open?
@@ -114,6 +117,25 @@ wait 0.1
 print ["after resizing:  " mold collect [foreach evt poll-events [keep evt/type]]]
 print "  (expected [resize] - an `offset` too where the system moves the frame)"
 
+;; `scale` set is a zoom: the window keeps its size on the screen, and all in
+;; it is drawn at the new scale - so its size in units changes, reported as
+;; a `resize`. none follows the screen again.
+screen: window/scale
+window/scale: screen * 2
+print ["zoomed:          " window/scale "(expected" screen * 2 ")"]
+print ["size in units:   " window/size "(expected 240x160 - half)"]
+wait 0.1
+print ["reported:        " mold collect [foreach evt poll-events [keep evt/type  keep evt/offset]] "(expected [resize 240x160])"]
+window/scale: 1
+print ["an integer:      " window/scale "(expected 1.0)"]
+print ["zero:            " error? try [window/scale: 0]]
+print ["too big:         " error? try [window/scale: 17]]
+print ["not a number:    " error? try [window/scale: "x"]]
+window/scale: none
+print ["the screen's:    " window/scale = screen "(expected true)"]
+print ["size again:      " window/size "(expected 480x320)"]
+poll-events
+
 ;;=============================================================================
 print as-yellow "^/== Showing the window"
 ;;=============================================================================
@@ -134,7 +156,8 @@ print as-yellow "^/== Images"
 ;; The window keeps a REFERENCE to the image, not a copy - so drawing into
 ;; it and calling `redraw` is all it takes to change what is on screen.
 ;; Images are drawn in the order they were added: the first at the bottom.
-;; Offsets and sizes are in device pixels, from the window's top-left.
+;; Offsets and sizes are in units, from the window's top-left - drawn
+;; `window/scale` times bigger in device pixels, so the same on any screen.
 ;;
 ;; Everything here is put on one group, the `stage`, which is kept in the
 ;; middle of the window: after anything is added or removed, and whenever
@@ -771,19 +794,23 @@ print as-yellow "^/== Nine-scale"
 
 ;; Scaled in nine pieces, by the box of its middle - [offset size] in its
 ;; own pixels: the corners keep their size, the edges stretch one way only
-;; and the middle both ways. A frame: red corners, edges 8 pixels wide
-;; striped white and grey (so stretched and tiled differ), a blue middle.
-panel: make image! [24x24 40.60.200]
+;; and the middle both ways. A frame whose every piece tells itself apart:
+;; corners 8x8 of four colours, edges 8 wide striped ACROSS their length -
+;; stretching only spreads the stripes, never turns them (diagonal stripes
+;; would seem to tilt, and look skewed) - and a checkered middle.
+panel: make image! 24x24
 repeat y 24 [
 	repeat x 24 [
-		edge-x: any [x <= 8  x > 16]
-		edge-y: any [y <= 8  y > 16]
-		if any [edge-x edge-y][
-			panel/(as-pair x y): case [
-				all [edge-x edge-y]  [255.0.0]
-				(x + y) % 4 < 2      [255.255.255]
-				true                 [150.150.150]
-			]
+		on-left: x <= 8   on-right:  x > 16
+		on-top:  y <= 8   on-bottom: y > 16
+		panel/(as-pair x y): case [
+			all [on-left  on-top]    [220.60.60]    ;; red
+			all [on-right on-top]    [60.200.60]    ;; green
+			all [on-left  on-bottom] [60.100.230]   ;; blue
+			all [on-right on-bottom] [230.200.40]   ;; yellow
+			any [on-top on-bottom]   [either odd? x [240.240.240][130.130.130]]
+			any [on-left on-right]   [either odd? y [240.240.240][130.130.130]]
+			true                     [either odd? x + y [70.70.110][40.40.60]]
 		]
 	]
 ]
@@ -806,8 +833,8 @@ twin/nine-scale: none
 center-content
 
 ;; WATCH: over the big gradient, the frame grows wider and taller - its
-;; red corners stay 8x8 and its striped edges only get longer, the stripes
-;; stretched wider; then it
+;; corners stay 8x8 and its edges only get longer, their stripes spread
+;; apart; then it
 ;; shrinks below the size of its corners, which shrink alike; then it
 ;; turns, still in nine pieces.
 repeat i 20 [box/size: as-pair 120 + (i * 4)  60 + (i * 2)  wait 0.02]
@@ -837,8 +864,9 @@ print ["a bad word:      " error? try [box/fill: 'repeat]]
 print ["a bad type:      " error? try [box/fill: none]]
 print ["of a group:      " error? try [grp/fill]]
 
-;; WATCH: the frame grows again, now its stripes keep their width - more of
-;; them, the last ones cut - while the corners stay as they were.
+;; WATCH: the frame grows again, now its stripes keep their spacing - more
+;; of them, the last ones cut - and so do the middle's squares, while the
+;; corners stay as they were.
 repeat i 20 [box/size: as-pair 120 + (i * 4)  60 + (i * 2)  wait 0.02]
 ;; WATCH: and rounded - the stripes never cut, only a little wider or
 ;; narrower, one more of them whenever there is room.
