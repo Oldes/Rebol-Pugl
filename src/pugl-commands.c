@@ -41,6 +41,7 @@ static PUGLWIN* Frm_Window(RXIFRM *frm, REBCNT n)
 }
 
 static void Set_Handle_Arg(RXIARG *arg, REBHOB *hob);
+static void Update_Cursor(PUGLWIN *win);
 
 // ... and as an image or a group handle (shown or removed).
 static PUGLNODE* Frm_Node(RXIFRM *frm, REBCNT n)
@@ -351,6 +352,7 @@ static void Detach_Node(PUGLNODE *n)
 	}
 	Release_Node(n, win);
 	Window_Changed(win);
+	Update_Cursor(win);   // it may have had the pointer's shape
 }
 
 /***********************************************************************
@@ -541,6 +543,49 @@ static PUGLNODE *Tracked_In(PUGLNODE *n)
 static REBHOB *Source_Of(PUGLWIN *win, PUGLNODE *n)
 {
 	return (n && n->hob) ? n->hob : win->hob;
+}
+
+/***********************************************************************
+**  The cursor to show: the first of the node under the pointer - or,
+**  during a drag, the one which took the press - and the groups around
+**  it which has one; else the window's. Set on the view only when it
+**  changes, and its result not looked at: a system which cannot set one
+**  (X11 without Xcursor) keeps what it has.
+***********************************************************************/
+static PuglCursor Cursor_Of_Word(REBCNT w)
+{
+	switch (w) {
+	case W_PUGL_CURSOR_CARET:              return PUGL_CURSOR_CARET;
+	case W_PUGL_CURSOR_CROSSHAIR:          return PUGL_CURSOR_CROSSHAIR;
+	case W_PUGL_CURSOR_HAND:               return PUGL_CURSOR_HAND;
+	case W_PUGL_CURSOR_NO:                 return PUGL_CURSOR_NO;
+	case W_PUGL_CURSOR_LEFT_RIGHT:         return PUGL_CURSOR_LEFT_RIGHT;
+	case W_PUGL_CURSOR_UP_DOWN:            return PUGL_CURSOR_UP_DOWN;
+	case W_PUGL_CURSOR_UP_LEFT_DOWN_RIGHT: return PUGL_CURSOR_UP_LEFT_DOWN_RIGHT;
+	case W_PUGL_CURSOR_UP_RIGHT_DOWN_LEFT: return PUGL_CURSOR_UP_RIGHT_DOWN_LEFT;
+	case W_PUGL_CURSOR_ALL_SCROLL:         return PUGL_CURSOR_ALL_SCROLL;
+	}
+	return PUGL_CURSOR_ARROW;
+}
+
+static void Update_Cursor(PUGLWIN *win)
+{
+	PUGLNODE *n = (PUGLNODE*)(win->capture ? win->capture : win->hover);
+	REBCNT    w = 0;
+
+	if (!win->view) return;
+	for (; n && !w; n = (PUGLNODE*)n->parent) w = n->cursor;
+	if (!w) w = win->cursor ? win->cursor : W_PUGL_CURSOR_ARROW;
+	if (w == win->cursor_now) return;
+	win->cursor_now = w;
+	puglSetCursor((PuglView*)win->view, Cursor_Of_Word(w));
+}
+
+// A cursor word given to a setter: its W_PUGL_CURSOR_*, or 0 if none.
+static REBCNT Cursor_Word(REBCNT *type, RXIARG *arg)
+{
+	if (*type != RXT_WORD) return 0;
+	return RL_FIND_WORD(Pugl_cursor_words, (REBCNT)arg->int32a);
 }
 
 // `enter` for the groups `n` is in and then `n` itself - outermost first -
@@ -778,6 +823,16 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 
 	default:
 		// PUGL_TEXT and the rest are queued but not reported yet.
+		break;
+	}
+
+	// What is under the pointer - or holds it - may have changed.
+	switch (e->type) {
+	case PUGL_BUTTON_PRESS: case PUGL_BUTTON_RELEASE: case PUGL_MOTION:
+	case PUGL_POINTER_IN:   case PUGL_POINTER_OUT:    case PUGL_FOCUS_OUT:
+		Update_Cursor(pv);
+		break;
+	default:
 		break;
 	}
 }
@@ -1215,6 +1270,11 @@ int PuglWindow_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = Nodes_Block((PUGLNODE*)pv->images, arg) ? RXT_BLOCK : RXT_NONE;
 		break;
 
+	case W_PUGL_ARG_CURSOR:
+		arg->int32a = (int)Pugl_cursor_words[pv->cursor ? pv->cursor : W_PUGL_CURSOR_ARROW];
+		*type = RXT_WORD;
+		break;
+
 	// The image! it was given, from the slot - not read back from the
 	// platform, which keeps only its own converted copy.
 	case W_PUGL_ARG_ICON: {
@@ -1264,6 +1324,13 @@ int PuglWindow_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		        (int)arg->pair.x, (int)arg->pair.y) != PUGL_SUCCESS)
 			return PE_BAD_SET;
 		break;
+
+	case W_PUGL_ARG_CURSOR: {
+		REBCNT w = Cursor_Word(type, arg);
+		if (!w) return *type == RXT_WORD ? PE_BAD_SET : PE_BAD_SET_TYPE;
+		pv->cursor = w;
+		Update_Cursor(pv);
+		break; }
 
 	case W_PUGL_ARG_ICON:
 		if (*type == RXT_NONE) {
@@ -1328,6 +1395,7 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	case W_PUGL_ARG_OPACITY:
 	case W_PUGL_ARG_BLEND:
 	case W_PUGL_ARG_TINT:
+	case W_PUGL_ARG_CURSOR:
 	case W_PUGL_ARG_INDEX:   return TRUE;
 	}
 	return FALSE;
@@ -1486,6 +1554,12 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_INTEGER;
 		break; }
 
+	case W_PUGL_ARG_CURSOR:
+		if (!im->cursor) { *type = RXT_NONE; break; }
+		arg->int32a = (int)Pugl_cursor_words[im->cursor];
+		*type = RXT_WORD;
+		break;
+
 	// As it was set - three values or four.
 	case W_PUGL_ARG_TINT:
 		if (!im->tint_len) { *type = RXT_NONE; break; }
@@ -1600,6 +1674,16 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
 		break; }
+
+	// Shown at once if the pointer is over it, or over something in it.
+	case W_PUGL_ARG_CURSOR: {
+		REBCNT w;
+		if (*type == RXT_NONE) w = 0;
+		else if (!(w = Cursor_Word(type, arg))) return *type == RXT_WORD ? PE_BAD_SET : PE_BAD_SET_TYPE;
+		im->cursor = w;
+		Update_Cursor((PUGLWIN*)im->win);
+		return PE_OK;   // nothing to redraw
+	}
 
 	// Red, green and blue - and alpha, when there is a fourth value; the
 	// rest of a longer tuple is not colour, and is refused.

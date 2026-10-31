@@ -898,6 +898,28 @@ grp/tint: none
 pattern/tint: 255.255.255.128  wait 0.4
 pattern/tint: none
 
+;;=============================================================================
+print as-yellow "^/== Cursors"
+;;=============================================================================
+
+;; The window's cursor, and one for an image or a group: the first of the
+;; one under the pointer and the groups around it which has one is shown -
+;; during a drag, the one which took the press - else the window's.
+print ["window's:        " mold window/cursor "(expected arrow)"]
+window/cursor: 'crosshair
+print ["set:             " mold window/cursor "(expected crosshair)"]
+print ["a bad word:      " error? try [window/cursor: 'pointer]]
+print ["not a word:      " error? try [window/cursor: none] "(expected true - a window always has one)"]
+window/cursor: 'arrow
+print ["an image's:      " mold img1/cursor "(expected none - its group's, or the window's)"]
+img1/cursor: 'hand
+print ["set:             " mold img1/cursor "(expected hand)"]
+print ["a bad word:      " error? try [img1/cursor: 'pointer]]
+print ["not a word:      " error? try [img1/cursor: 1]]
+img1/cursor: none
+print ["none again:      " mold img1/cursor "(expected none)"]
+print ["a group's:       " mold grp/cursor "(expected none)"]
+
 ;; The extension's hit test and the test's own agree everywhere - over all
 ;; of the above: turned, scaled, clipped, nested, hidden.
 disagree: 0
@@ -964,6 +986,10 @@ The two big images, the group of white squares, its lower square's group
 and the top-left square report `enter` and `leave` themselves (as the event
 source); the window reports its own when the pointer crosses its edge.
 Moving between the squares of the group does not leave the group.
+The pointer changes over them: a hand over the two sprites, a crosshair
+over the white squares but "not allowed" over the top-left one, left-right
+arrows over the striped frame - kept while dragging off it - and all-scroll
+over the viewport.
 A press on a tracked one comes from it - or from its tracked group - and so
 do its release and the drag, even when the pointer goes off it; a scroll
 over one comes from it too.
@@ -991,6 +1017,16 @@ inner/track?: true
 g1/track?:    true
 viewport/track?: true
 scroll/track?:   true
+
+;; Cursors to see while moving around - the group's over its squares, but
+;; its top-left one has its own; the frame's arrows stay while dragged off it.
+sprite/cursor:   'hand
+twin/cursor:     'hand
+grp/cursor:      'crosshair
+g1/cursor:       'no
+box/cursor:      'left-right
+box/track?:      true   ;; so that it takes the press, and keeps its cursor
+viewport/cursor: 'all-scroll
 
 report: func [event /local type position d hit src own pixel][
 	type:     event/type

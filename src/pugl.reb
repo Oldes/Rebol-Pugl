@@ -109,6 +109,11 @@ typedef struct Pugl_Window_Context {
 	// `up` and its drag `move`s come from it until every button is up,
 	// wherever the pointer goes - so a button sees its own release.
 	void   *capture;
+
+	// The window's own cursor (W_PUGL_CURSOR_*, 0 for arrow), and the one
+	// shown now - set only on a change.
+	REBCNT  cursor;
+	REBCNT  cursor_now;
 } PUGLWIN;
 
 // An image shown in a window, or a group of them - the same context for
@@ -137,6 +142,7 @@ typedef struct Pugl_Node_Context {
 	double  px, py;
 	double  opacity; // 0.0 - 1.0
 	REBCNT  blend;   // W_PUGL_BLEND_*, or 0 for the group's (normal at the top)
+	REBCNT  cursor;      // W_PUGL_CURSOR_*, or 0 for its group's (the window's)
 	REBCNT  tint_len;    // 0 for no tint, else 3 or 4 - the tuple as set
 	REBYTE  tint[4];     // R G B, and A where tint_len is 4 (255 opaque)
 	REBCNT  slot;    // its window's texture slot, 1-based; 0 for none
@@ -173,6 +179,19 @@ words: [
 		tile        ;; repeated at its own size, as a pattern - the last ones cut
 		round       ;; repeated a whole number of times, scaled a little to fit
 	]
+	;; Pointer shapes - pugl's own, in its order (PuglCursor).
+	cursor: [
+		arrow               ;; the default pointing arrow
+		caret               ;; the I-beam, for text
+		crosshair
+		hand                ;; a pointing finger - something to click
+		no                  ;; not allowed
+		left-right          ;; horizontal resize
+		up-down             ;; vertical resize
+		up-left-down-right  ;; diagonal resize
+		up-right-down-left  ;; the other diagonal
+		all-scroll          ;; move or pan in any direction
+	]
 	;; What `index` takes besides a number.
 	place: [
 		top         ;; drawn last in its list - above the rest of it
@@ -195,6 +214,7 @@ handles: [
 		open?    logic!    none      "False once the window has been closed"
 		images   block!    none      "Images and groups added to it, in drawing order - the first one at the bottom"
 		textures integer!  none      "How many textures it holds - one per image! shown, however many image handles show it"
+		cursor   word!     word!     "The pointer's shape over it, where nothing under the pointer has its own: arrow (default), caret, crosshair, hand, no, left-right, up-down, up-left-down-right, up-right-down-left or all-scroll"
 		icon     image!    [image! none!] "Icon of the window - its title bar and taskbar entry; on macOS the application's Dock icon, which the last one set wins; none for the default. Copied when set: drawing into the image changes it only when it is set again"
 	]
 	image: [
@@ -216,6 +236,7 @@ handles: [
 		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its top-left (default 0x0)"
 		opacity  percent!  [percent! decimal! integer!] "How opaque it is, 0% to 100% (default 100%); still there for the pointer at 0%"
 		blend    word!     [word! none!] "How it is drawn over what is below: normal, add, multiply or screen; none (default) for its group's"
+		cursor   word!     [word! none!] "The pointer's shape over it - one of the window's cursor words; none (default) for its group's, or the window's"
 		tint     tuple!    [tuple! none!] "A colour its own is multiplied by - a fourth value is alpha, 255 opaque, multiplied with its opacity; none (default) for none"
 		index    integer!  [integer! word!] "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it"
 	]
@@ -235,6 +256,7 @@ handles: [
 		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its origin (default 0x0)"
 		opacity  percent!  [percent! decimal! integer!] "How opaque all in it is, 0% to 100% (default 100%), multiplied with their own"
 		blend    word!     [word! none!] "How what is in it is drawn, where it does not say itself: normal, add, multiply or screen; none (default) for its own group's"
+		cursor   word!     [word! none!] "The pointer's shape over all in it which does not have its own; none (default) for its group's, or the window's"
 		tint     tuple!    [tuple! none!] "A colour all in it is multiplied by, on top of their own tint - a fourth value is alpha; none (default) for none"
 		index    integer!  [integer! word!] "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it, with all in it"
 	]
