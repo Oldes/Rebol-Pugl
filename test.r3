@@ -920,6 +920,44 @@ img1/cursor: none
 print ["none again:      " mold img1/cursor "(expected none)"]
 print ["a group's:       " mold grp/cursor "(expected none)"]
 
+;;=============================================================================
+print as-yellow "^/== Filtering"
+;;=============================================================================
+
+;; How a texture is sampled when not drawn 1:1: nearest - sharp pixels, the
+;; default - or linear, smooth. Through groups like blend: none is the
+;; group's, nearest at the top.
+print ["filter:          " mold img2/filter "(expected none - its group's, nearest)"]
+img2/filter: 'linear
+print ["set:             " mold img2/filter "(expected linear)"]
+print ["a bad word:      " error? try [img2/filter: 'cubic]]
+print ["not a word:      " error? try [img2/filter: 1]]
+img2/filter: none
+print ["none again:      " mold img2/filter "(expected none)"]
+print ["a group's:       " mold viewport/filter "(expected none)"]
+
+;; WATCH: the small gradient, scaled and tilted top-right - its blocky
+;; pixels and jagged edges turn smooth, then sharp again, then smooth.
+wait 0.4
+img2/filter: 'linear   wait 0.4
+img2/filter: 'nearest  wait 0.4
+img2/filter: 'linear
+
+;; Two handles on ONE texture, wanting different filters: the texture is
+;; switched between them as they are drawn. WATCH: the bigger atlas frame
+;; is smooth while the small sprite next to it stays sharp.
+count: window/textures
+twin/filter: 'linear
+sprite/part: [32x0 32x32]
+sprite/scale: 1.5
+wait 0.5
+print ["still shared:    " all [same? sprite/image twin/image  count = window/textures] "(expected true - no texture added)"]
+sprite/scale: 1
+
+;; A group's for all in it. WATCH: the turned viewport's gradient smooths.
+viewport/filter: 'linear
+wait 0.4
+
 ;; The extension's hit test and the test's own agree everywhere - over all
 ;; of the above: turned, scaled, clipped, nested, hidden.
 disagree: 0

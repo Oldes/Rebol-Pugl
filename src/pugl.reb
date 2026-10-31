@@ -60,6 +60,7 @@ typedef struct Pugl_Texture {
 	REBINT  w, h;    // the size it was made with
 	REBCNT  refs;    // image handles using it
 	REBCNT  dirty;   // the pixels must be uploaded again
+	REBCNT  filter;  // W_PUGL_FILTER_* it is set to now, 0 before its first draw
 } PUGLTEX;
 
 // The payload is opaque (`view` is a void* rather than a PuglView*), so
@@ -143,6 +144,7 @@ typedef struct Pugl_Node_Context {
 	double  opacity; // 0.0 - 1.0
 	REBCNT  blend;   // W_PUGL_BLEND_*, or 0 for the group's (normal at the top)
 	REBCNT  cursor;      // W_PUGL_CURSOR_*, or 0 for its group's (the window's)
+	REBCNT  filter;      // W_PUGL_FILTER_*, or 0 for its group's (nearest at the top)
 	REBCNT  tint_len;    // 0 for no tint, else 3 or 4 - the tuple as set
 	REBYTE  tint[4];     // R G B, and A where tint_len is 4 (255 opaque)
 	REBCNT  slot;    // its window's texture slot, 1-based; 0 for none
@@ -178,6 +180,11 @@ words: [
 		scale       ;; stretched to it
 		tile        ;; repeated at its own size, as a pattern - the last ones cut
 		round       ;; repeated a whole number of times, scaled a little to fit
+	]
+	;; How a texture is sampled when it is not drawn 1:1.
+	filter: [
+		nearest     ;; the nearest pixel - sharp, blocky when scaled; pixel art, atlases
+		linear      ;; between the nearest four - smooth when scaled or turned
 	]
 	;; Pointer shapes - pugl's own, in its order (PuglCursor).
 	cursor: [
@@ -236,6 +243,7 @@ handles: [
 		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its top-left (default 0x0)"
 		opacity  percent!  [percent! decimal! integer!] "How opaque it is, 0% to 100% (default 100%); still there for the pointer at 0%"
 		blend    word!     [word! none!] "How it is drawn over what is below: normal, add, multiply or screen; none (default) for its group's"
+		filter   word!     [word! none!] "How it is sampled when not drawn 1:1 - nearest: sharp pixels, or linear: smooth; none (default) for its group's, nearest at the top. An atlas drawn linear wants a gap between its frames"
 		cursor   word!     [word! none!] "The pointer's shape over it - one of the window's cursor words; none (default) for its group's, or the window's"
 		tint     tuple!    [tuple! none!] "A colour its own is multiplied by - a fourth value is alpha, 255 opaque, multiplied with its opacity; none (default) for none"
 		index    integer!  [integer! word!] "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it"
@@ -256,6 +264,7 @@ handles: [
 		pivot    pair!     pair!     "Point it is turned and scaled around, in its own units from its origin (default 0x0)"
 		opacity  percent!  [percent! decimal! integer!] "How opaque all in it is, 0% to 100% (default 100%), multiplied with their own"
 		blend    word!     [word! none!] "How what is in it is drawn, where it does not say itself: normal, add, multiply or screen; none (default) for its own group's"
+		filter   word!     [word! none!] "How all in it is sampled, where it does not say itself - nearest or linear; none (default) for its own group's"
 		cursor   word!     [word! none!] "The pointer's shape over all in it which does not have its own; none (default) for its group's, or the window's"
 		tint     tuple!    [tuple! none!] "A colour all in it is multiplied by, on top of their own tint - a fourth value is alpha; none (default) for none"
 		index    integer!  [integer! word!] "Its place in its window's or group's list, 1 at the bottom; set a number (clamped) or top or bottom to move it, with all in it"

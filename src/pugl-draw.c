@@ -93,12 +93,13 @@ static void Upload(PUGLTEX *t, REBSER *img, REBINT w, REBINT h)
 		t->texture = (REBCNT)tex;
 		t->w = t->h = 0;
 		t->dirty = TRUE;
+		// Set at its first draw - and it must be: GL's own default wants
+		// mipmaps, which these textures do not have.
+		t->filter = 0;
 	}
 	glBindTexture(GL_TEXTURE_2D, (GLuint)t->texture);
 	if (!t->dirty) return;
 
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
@@ -350,13 +351,14 @@ static void Set_Blend(REBCNT mode)
 **  up, draws what is in it at that level, and takes the mark back.
 ***********************************************************************/
 static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float alpha,
-                      const float tint[3], REBCNT blend, GLint level, float win_w, float win_h)
+                      const float tint[3], REBCNT blend, REBCNT filter,
+                      GLint level, float win_w, float win_h)
 {
 	for (; im; im = (PUGLNODE*)im->next) {
 		REBSER   *img = (REBSER*)im->image;
 		PUGLXFORM m;
 		float     a, t[3];
-		REBCNT    b;
+		REBCNT    b, f;
 		REBINT    iw, ih;
 
 		if (!im->visible) continue;
@@ -364,6 +366,7 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 		Pugl_Xform_Mul(&m, parent, &m);
 		a = alpha * (float)im->opacity;
 		b = im->blend ? im->blend : blend;
+		f = im->filter ? im->filter : filter;
 		t[0] = tint[0]; t[1] = tint[1]; t[2] = tint[2];
 		if (im->tint_len) {
 			t[0] *= im->tint[0] / 255.0f;
@@ -375,12 +378,12 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 		if (im->group) {
 			REBOOL clips = (im->w > 0 || im->h > 0) && level < 255;
 			if (!clips) {
-				Draw_List(win, (PUGLNODE*)im->children, &m, a, t, b, level, win_w, win_h);
+				Draw_List(win, (PUGLNODE*)im->children, &m, a, t, b, f, level, win_w, win_h);
 				continue;
 			}
 			Stencil_Box(im, &m, level, +1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level + 1, 0xFF);
-			Draw_List(win, (PUGLNODE*)im->children, &m, a, t, b, level + 1, win_w, win_h);
+			Draw_List(win, (PUGLNODE*)im->children, &m, a, t, b, f, level + 1, win_w, win_h);
 			Stencil_Box(im, &m, level + 1, -1, win_w, win_h);
 			glStencilFunc(GL_EQUAL, level, 0xFF);
 			continue;
@@ -393,6 +396,20 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 
 		Upload(&win->tex[im->slot - 1], img, iw, ih);
 		if (a <= 0.0f) continue;   // uploaded all the same, for when it shows
+
+		// The filter is the texture's in GL, so a texture shared by handles
+		// which want different ones is switched between them - only when
+		// the next one differs.
+		{
+			PUGLTEX *tx = &win->tex[im->slot - 1];
+			REBCNT   fl = f;
+			if (tx->filter != fl) {
+				GLint sampling = (fl == W_PUGL_FILTER_LINEAR) ? GL_LINEAR : GL_NEAREST;
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampling);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampling);
+				tx->filter = fl;
+			}
+		}
 
 		Load_Xform(&m);
 		Set_Blend(b);
@@ -450,7 +467,8 @@ void Pugl_Draw(PUGLWIN *pv, PuglView *view)
 	glStencilFunc(GL_EQUAL, 0, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 
-	Draw_List(pv, (PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, White, W_PUGL_BLEND_NORMAL, 0,
+	Draw_List(pv, (PUGLNODE*)pv->images, &Pugl_Identity, 1.0f, White, W_PUGL_BLEND_NORMAL,
+	          W_PUGL_FILTER_NEAREST, 0,
 	          (float)area.width, (float)area.height);
 
 	glDisable(GL_STENCIL_TEST);

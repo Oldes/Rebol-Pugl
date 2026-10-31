@@ -1396,6 +1396,7 @@ static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 	case W_PUGL_ARG_BLEND:
 	case W_PUGL_ARG_TINT:
 	case W_PUGL_ARG_CURSOR:
+	case W_PUGL_ARG_FILTER:
 	case W_PUGL_ARG_INDEX:   return TRUE;
 	}
 	return FALSE;
@@ -1554,6 +1555,12 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_INTEGER;
 		break; }
 
+	case W_PUGL_ARG_FILTER:
+		if (!im->filter) { *type = RXT_NONE; break; }
+		arg->int32a = (int)Pugl_filter_words[im->filter];
+		*type = RXT_WORD;
+		break;
+
 	case W_PUGL_ARG_CURSOR:
 		if (!im->cursor) { *type = RXT_NONE; break; }
 		arg->int32a = (int)Pugl_cursor_words[im->cursor];
@@ -1673,6 +1680,16 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		else return PE_BAD_SET_TYPE;
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
+		break; }
+
+	case W_PUGL_ARG_FILTER: {
+		REBCNT mode = 0;
+		if (*type != RXT_NONE) {
+			if (*type != RXT_WORD) return PE_BAD_SET_TYPE;
+			mode = RL_FIND_WORD(Pugl_filter_words, (REBCNT)arg->int32a);
+			if (!mode) return PE_BAD_SET;
+		}
+		im->filter = mode;
 		break; }
 
 	// Shown at once if the pointer is over it, or over something in it.
