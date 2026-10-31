@@ -132,6 +132,11 @@ typedef struct Pugl_Node_Context {
 	double  opacity; // 0.0 - 1.0
 	REBCNT  blend;   // W_PUGL_BLEND_*, or 0 for the group's (normal at the top)
 	REBCNT  slot;    // its window's texture slot, 1-based; 0 for none
+
+	// The part of the image! shown, in its pixels - an atlas frame. part_w 0
+	// is the whole image. Its size is the image's own size where `size`
+	// has a zero axis.
+	REBINT  part_x, part_y, part_w, part_h;
 } PUGLNODE;
 }
 
@@ -175,8 +180,9 @@ handles: [
 		"Pugl image handle - an image! shown in a window"
 		;NAME    GET       SET       DESCRIPTION
 		image    image!    image!    "The image shown - kept by reference: draw into it and call `redraw`"
+		part     block!    [block! none!] "The part of the image shown - [offset size] in its pixels, a frame of an atlas; none (default) for all of it"
 		offset   pair!     pair!     "Position of its top-left corner in the window - or in its group"
-		size     pair!     pair!     "Size it is drawn at - scaled to it; a zero axis is the image's own"
+		size     pair!     pair!     "Size it is drawn at - scaled to it; a zero axis is the image's own, or its part's"
 		visible? logic!    logic!    "Whether it is drawn"
 		track?   logic!    logic!    "Whether `enter` and `leave` are reported for it, with the image as the source; off by default"
 		hover?   logic!    none      "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"
@@ -234,6 +240,7 @@ commands: [
 		image  [image!]  "Shown as is; the window keeps a reference, not a copy"
 		offset [pair!]   "Position of its top-left corner in the window"
 		/size sz [pair!] "Scales it to this size (default: the image's own)"
+		/part rect [block!] "Shows only this part of the image: [offset size] in its pixels"
 	]
 	remove-image: [
 		"Takes an image out of its window - or a group, with all that is in it"

@@ -22,6 +22,7 @@ static const REBYTE* ERR_NO_WINDOW      = (const REBYTE*)"Failed to create the w
 static const REBYTE* ERR_NO_WORLD       = (const REBYTE*)"Pugl world is not initialized!";
 static const REBYTE* ERR_BAD_SIZE       = (const REBYTE*)"Size must be between 1x1 and 10000x10000!";
 static const REBYTE* ERR_BAD_IMAGE      = (const REBYTE*)"Empty or invalid image!";
+static const REBYTE* ERR_BAD_PART       = (const REBYTE*)"Part must be [offset size] inside the image!";
 
 // Every open view, so they can all go before the world does.
 static PUGLWIN *Windows_Head = NULL;
@@ -205,6 +206,27 @@ static void Retire_Texture(PUGLWIN *win, REBCNT tex)
 		win->dead_size = size;
 	}
 	win->dead[win->dead_count++] = tex;
+}
+
+/***********************************************************************
+**  A part of an image! - [offset size], two pairs and nothing else, the
+**  size not zero, all of it inside the image. Into x, y, w, h.
+***********************************************************************/
+static REBOOL Read_Part(REBSER *blk, REBCNT index, REBSER *img, REBINT part[4])
+{
+	RXIARG off, size, rest;
+
+	if (RL_GET_VALUE(blk, index,     &off)  != RXT_PAIR) return FALSE;
+	if (RL_GET_VALUE(blk, index + 1, &size) != RXT_PAIR) return FALSE;
+	if (RL_GET_VALUE(blk, index + 2, &rest) != 0)        return FALSE;  // only two
+
+	part[0] = (REBINT)off.pair.x;
+	part[1] = (REBINT)off.pair.y;
+	part[2] = (REBINT)size.pair.x;
+	part[3] = (REBINT)size.pair.y;
+	return part[0] >= 0 && part[1] >= 0 && part[2] > 0 && part[3] > 0
+	    && part[0] + part[2] <= (REBINT)IMG_WIDE(img)
+	    && part[1] + part[3] <= (REBINT)IMG_HIGH(img);
 }
 
 /***********************************************************************
@@ -470,8 +492,12 @@ static PUGLNODE *Image_At(PUGLNODE *list, double x, double y)
 			continue;
 		}
 		if (!n->image) continue;
-		w = n->w > 0 ? n->w : (double)IMG_WIDE((REBSER*)n->image);
-		h = n->h > 0 ? n->h : (double)IMG_HIGH((REBSER*)n->image);
+		{
+			REBINT dw, dh;
+			Pugl_Drawn_Size(n, &dw, &dh);
+			w = dw;
+			h = dh;
+		}
 		if (lx >= 0 && ly >= 0 && lx < w && ly < h) top = n;
 	}
 	return top;
@@ -855,6 +881,7 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 	REBSER    *slots;
 	PUGLNODE  *im;
 	REBINT     w = 0, h = 0;
+	REBINT     part[4] = { 0, 0, 0, 0 };
 
 	if (!win) RETURN_ERROR(ERR_INVALID_TARGET);
 	if (!img || IMG_WIDE(img) == 0 || IMG_HIGH(img) == 0) RETURN_ERROR(ERR_BAD_IMAGE);
@@ -863,6 +890,8 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 		h = (REBINT)RXA_PAIR(frm, 5).y;
 		if (w < 0 || h < 0 || w > 10000 || h > 10000) RETURN_ERROR(ERR_BAD_SIZE);
 	}
+	if (RXA_REF(frm, 6) && !Read_Part(RXA_SERIES(frm, 7), RXA_INDEX(frm, 7), img, part))
+		RETURN_ERROR(ERR_BAD_PART);
 
 	hob = RL_MAKE_HANDLE_CONTEXT(Handle_PuglImage);
 	if (!hob) RETURN_ERROR(ERR_NO_HANDLE);
@@ -891,6 +920,10 @@ COMMAND cmd_pugl_add_image(RXIFRM *frm, void *ctx)
 	im->y       = (REBINT)RXA_PAIR(frm, 3).y;
 	im->w       = w;
 	im->h       = h;
+	im->part_x  = part[0];
+	im->part_y  = part[1];
+	im->part_w  = part[2];
+	im->part_h  = part[3];
 	Link_Node(win, parent, im);
 	Window_Changed(win);
 
@@ -1137,7 +1170,8 @@ int PuglWindow_mold(REBHOB *hob, REBSER *str)
 static REBOOL Node_Has(PUGLNODE *n, REBCNT word)
 {
 	switch (word) {
-	case W_PUGL_ARG_IMAGE:   return !n->group;
+	case W_PUGL_ARG_IMAGE:
+	case W_PUGL_ARG_PART:    return !n->group;
 	case W_PUGL_ARG_IMAGES:  return n->group ? TRUE : FALSE;
 	case W_PUGL_ARG_SIZE:
 	case W_PUGL_ARG_OFFSET:
@@ -1215,8 +1249,12 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 			*type = RXT_PAIR;
 			break;
 		}
-		arg->pair.x = (float)(im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image));
-		arg->pair.y = (float)(im->h > 0 ? im->h : (REBINT)IMG_HIGH((REBSER*)im->image));
+		{
+			REBINT dw, dh;
+			Pugl_Drawn_Size(im, &dw, &dh);
+			arg->pair.x = (float)dw;
+			arg->pair.y = (float)dh;
+		}
 		*type = RXT_PAIR;
 		break;
 
@@ -1280,6 +1318,23 @@ int PuglImage_get_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		*type = RXT_PERCENT;
 		break;
 
+	// A new block each time: [offset size], or none for the whole image.
+	case W_PUGL_ARG_PART: {
+		REBSER *blk;
+		RXIARG  val;
+		if (!im->part_w) { *type = RXT_NONE; break; }
+		blk = (REBSER*)RL_MAKE_BLOCK(2);
+		if (!blk) { *type = RXT_NONE; break; }
+		CLEARS(&val);
+		val.pair.x = (float)im->part_x;  val.pair.y = (float)im->part_y;
+		RL_SET_VALUE(blk, 0, val, RXT_PAIR);
+		val.pair.x = (float)im->part_w;  val.pair.y = (float)im->part_h;
+		RL_SET_VALUE(blk, 1, val, RXT_PAIR);
+		arg->series = blk;
+		arg->index  = 0;
+		*type = RXT_BLOCK;
+		break; }
+
 	// 1-based, in drawing order - like a series index.
 	case W_PUGL_ARG_INDEX: {
 		PUGLNODE *n = *Node_List((PUGLWIN*)im->win, (PUGLNODE*)im->parent);
@@ -1323,6 +1378,11 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		if (*type != RXT_IMAGE) return PE_BAD_SET_TYPE;
 		img = (REBSER*)arg->image;
 		if (!img || IMG_WIDE(img) == 0 || IMG_HIGH(img) == 0) return PE_BAD_SET;
+		// A part must still be inside - another atlas of the same size is
+		// fine, a smaller image is refused.
+		if (im->part_w && (im->part_x + im->part_w > (REBINT)IMG_WIDE(img)
+		                || im->part_y + im->part_h > (REBINT)IMG_HIGH(img)))
+			return PE_BAD_RANGE;
 		slot = Tex_Use(win, img);
 		if (!slot) return PE_BAD_SET;
 		Tex_Drop(win, im->slot);
@@ -1388,6 +1448,23 @@ int PuglImage_set_path(REBHOB *hob, REBCNT word, REBCNT *type, RXIARG *arg)
 		else return PE_BAD_SET_TYPE;
 		if (o < 0.0 || o > 1.0) return PE_BAD_RANGE;
 		im->opacity = o;
+		break; }
+
+	// Only the part shown: the same texture, other texture coordinates -
+	// stepping it is how a sprite is animated, at no upload.
+	case W_PUGL_ARG_PART: {
+		REBINT part[4];
+		if (*type == RXT_NONE) {
+			im->part_x = im->part_y = im->part_w = im->part_h = 0;
+			break;
+		}
+		if (*type != RXT_BLOCK) return PE_BAD_SET_TYPE;
+		if (!Read_Part((REBSER*)arg->series, arg->index, (REBSER*)im->image, part))
+			return PE_BAD_SET;
+		im->part_x = part[0];
+		im->part_y = part[1];
+		im->part_w = part[2];
+		im->part_h = part[3];
 		break; }
 
 	// Moved within its list: out and back in at the place asked for. The
@@ -1458,11 +1535,10 @@ int PuglImage_mold(REBHOB *hob, REBSER *str)
 				(unsigned long)(REBUPT)im, (unsigned)count, (int)im->x, (int)im->y);
 		}
 	} else if (im->win && im->image) {
+		REBINT dw, dh;
+		Pugl_Drawn_Size(im, &dw, &dh);
 		snprintf(text, sizeof(text), "0#%lx %dx%d at %dx%d",
-			(unsigned long)(REBUPT)im,
-			(int)(im->w > 0 ? im->w : (REBINT)IMG_WIDE((REBSER*)im->image)),
-			(int)(im->h > 0 ? im->h : (REBINT)IMG_HIGH((REBSER*)im->image)),
-			(int)im->x, (int)im->y);
+			(unsigned long)(REBUPT)im, (int)dw, (int)dh, (int)im->x, (int)im->y);
 	} else {
 		snprintf(text, sizeof(text), "0#%lx removed", (unsigned long)(REBUPT)im);
 	}

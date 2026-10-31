@@ -67,6 +67,23 @@ static inline int Pugl_Xform_Undo(const PUGLXFORM *m, double *x, double *y)
 	return 1;
 }
 
+// An image node's own size: its part's, or the whole image!'s.
+static inline void Pugl_Own_Size(const PUGLNODE *n, REBINT *w, REBINT *h)
+{
+	if (n->part_w > 0) { *w = n->part_w; *h = n->part_h; return; }
+	*w = (REBINT)IMG_WIDE((REBSER*)n->image);
+	*h = (REBINT)IMG_HIGH((REBSER*)n->image);
+}
+
+// The size it is drawn at: `size`, a zero axis taken from its own.
+static inline void Pugl_Drawn_Size(const PUGLNODE *n, REBINT *w, REBINT *h)
+{
+	REBINT ow, oh;
+	Pugl_Own_Size(n, &ow, &oh);
+	*w = n->w > 0 ? n->w : ow;
+	*h = n->h > 0 ? n->h : oh;
+}
+
 // pugl.c
 extern PuglWorld *Pugl_World;
 extern REBCNT     Pugl_Windows;          // views realized and not yet closed

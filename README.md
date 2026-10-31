@@ -82,6 +82,8 @@ Shows an image in a window or a group and returns its handle
 * `offset` `[pair!]` Position of its top-left corner in the window
 * `/size`
 * `sz` `[pair!]` Scales it to this size (default: the image's own)
+* `/part`
+* `rect` `[block!]` Shows only this part of the image: [offset size] in its pixels
 
 #### `remove-image` `:image`
 Takes an image out of its window - or a group, with all that is in it
@@ -118,8 +120,9 @@ Makes a group in a window or a group and returns its handle
 ```rebol
 ;Refinement       Gets                Sets                          Description
 /image            image!              image!                        "The image shown - kept by reference: draw into it and call `redraw`"
+/part             block!              [block! none!]                "The part of the image shown - [offset size] in its pixels, a frame of an atlas; none (default) for all of it"
 /offset           pair!               pair!                         "Position of its top-left corner in the window - or in its group"
-/size             pair!               pair!                         "Size it is drawn at - scaled to it; a zero axis is the image's own"
+/size             pair!               pair!                         "Size it is drawn at - scaled to it; a zero axis is the image's own, or its part's"
 /visible?         logic!              logic!                        "Whether it is drawn"
 /track?           logic!              logic!                        "Whether `enter` and `leave` are reported for it, with the image as the source; off by default"
 /hover?           logic!              none                          "Whether the pointer is over it - the topmost visible image under the pointer, as of the last `poll-events`"

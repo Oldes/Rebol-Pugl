@@ -132,14 +132,20 @@ static void Load_Xform(const PUGLXFORM *m)
 	glLoadMatrixf(g);
 }
 
-static void Quad(float w, float h)
+// A quad of w by h, showing the texture from u0,v0 to u1,v1.
+static void Quad_Of(float w, float h, float u0, float v0, float u1, float v1)
 {
 	glBegin(GL_QUADS);
-	glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, 0.0f);
-	glTexCoord2f(1.0f, 0.0f); glVertex2f(w,    0.0f);
-	glTexCoord2f(1.0f, 1.0f); glVertex2f(w,    h);
-	glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, h);
+	glTexCoord2f(u0, v0); glVertex2f(0.0f, 0.0f);
+	glTexCoord2f(u1, v0); glVertex2f(w,    0.0f);
+	glTexCoord2f(u1, v1); glVertex2f(w,    h);
+	glTexCoord2f(u0, v1); glVertex2f(0.0f, h);
 	glEnd();
+}
+
+static void Quad(float w, float h)
+{
+	Quad_Of(w, h, 0.0f, 0.0f, 1.0f, 1.0f);
 }
 
 /***********************************************************************
@@ -251,7 +257,22 @@ static void Draw_List(PUGLWIN *win, PUGLNODE *im, const PUGLXFORM *parent, float
 		Set_Blend(b);
 		// All four: the colour is premultiplied, so it fades with the alpha.
 		glColor4f(a, a, a, a);
-		Quad((float)(im->w > 0 ? im->w : iw), (float)(im->h > 0 ? im->h : ih));
+		{
+			// Its part only - an atlas frame - or the whole of it. Texture
+			// coordinates are fractions of the image; with GL_NEAREST a
+			// frame's neighbours do not bleed in at whole-number scales.
+			REBINT dw, dh;
+			float  u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+			Pugl_Drawn_Size(im, &dw, &dh);
+			if (im->part_w > 0
+			 && im->part_x + im->part_w <= iw && im->part_y + im->part_h <= ih) {
+				u0 = (float)im->part_x / (float)iw;
+				v0 = (float)im->part_y / (float)ih;
+				u1 = (float)(im->part_x + im->part_w) / (float)iw;
+				v1 = (float)(im->part_y + im->part_h) / (float)ih;
+			}
+			Quad_Of((float)dw, (float)dh, u0, v0, u1, v1);
+		}
 	}
 }
 

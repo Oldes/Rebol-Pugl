@@ -143,11 +143,15 @@ paint: function [
 	"Fills the image with a red/green gradient, turned and tinted blue by the shift"
 	img   [image!]
 	shift [integer!] "0 to 255 - from not turned to turned upside down"
+	/part "Only a box of it - a frame of an atlas"
+		origin [pair!] "Its top-left, 0x0 at the image's"
+		box    [pair!] "Its size"
 ][
 	;; A blue tint alone is hard to tell on a small image, so the gradient
 	;; is turned around the middle too: red grows along one direction and
 	;; green across it, both clipped to 0..255 in the corners.
-	size:  img/size
+	size:  either part [box][img/size]
+	unless part [origin: 0x0]
 	shift: shift % 256
 	angle: shift * 180 / 255
 	c: cosine angle
@@ -158,7 +162,7 @@ paint: function [
 			dy: (y - (size/y / 2)) / size/y
 			u: dx * c - (dy * s) + 0.5
 			v: dx * s + (dy * c) + 0.5
-			img/(as-pair x y): to tuple! reduce [
+			img/(origin + as-pair x y): to tuple! reduce [
 				max 0 min 255 to integer! 255 * u
 				max 0 min 255 to integer! 255 * v
 				shift
@@ -630,6 +634,59 @@ mix/index: 'top
 wait 0.3
 
 ;;=============================================================================
+print as-yellow "^/== An atlas"
+;;=============================================================================
+
+;; Frames side by side in one image!, each shown by a `part` - [offset
+;; size] in the image's pixels. Handles showing the same atlas share its
+;; texture, and stepping a part animates a sprite without any upload.
+atlas: make image! 128x32
+repeat n 4 [paint/part atlas n * 60 as-pair n - 1 * 32 0 32x32]
+textures-before: window/textures
+
+sprite: add-image/part stage atlas 200x40 [0x0 32x32]
+print ["part:            " mold sprite/part "(expected [0x0 32x32])"]
+print ["its own size:    " sprite/size "(expected 32x32 - the part's)"]
+print ["molded:          " mold sprite "(expected 0#... 32x32 at 200x40)"]
+twin: add-image/size/part stage atlas 200x90 64x64 [32x0 32x32]
+print ["scaled frame:    " twin/size "(expected 64x64)"]
+print ["one texture:     " window/textures - textures-before "(expected 1 - for both)"]
+center-content
+
+print ["outside:         " error? try [sprite/part: [100x0 32x32]]]
+print ["zero size:       " error? try [sprite/part: [0x0 0x10]]]
+print ["before the head: " error? try [sprite/part: [-1x0 8x8]]]
+print ["only one pair:   " error? try [sprite/part: [0x0]]]
+print ["three values:    " error? try [sprite/part: [0x0 8x8 8x8]]]
+print ["not pairs:       " error? try [sprite/part: [0 8]]]
+print ["a string:        " error? try [sprite/part: "x"]]
+print ["bad /part:       " error? try [add-image/part stage atlas 0x0 [96x0 64x32]]]
+print ["a smaller image: " error? try [sprite/image: make image! 16x16] "(expected true - the part would be outside)"]
+print ["unchanged:       " same? sprite/image atlas "(expected true)"]
+print ["of a group:      " error? try [grp/part]]
+
+sprite/part: none
+print ["the whole of it: " sprite/size "(expected 128x32)"]
+sprite/part: [0x0 32x32]
+print ["a frame again:   " sprite/size "(expected 32x32)"]
+
+;; WATCH: over the top-right of the big gradient, the sprite steps through its four frames
+;; three times, each turned another way; its twin, twice as big, shows the
+;; second frame all along.
+repeat i 12 [
+	sprite/part: reduce [as-pair (i % 4) * 32 0  32x32]
+	wait 0.1
+]
+print ["still one:       " window/textures - textures-before "(expected 1 - nothing was uploaded)"]
+
+;; WATCH: drawing into the atlas shows in both - one texture, one redraw.
+paint/part atlas 0 32x0 32x32
+redraw twin
+wait 0.3
+center-content
+print ["centered:        " centered? "(expected true)"  "stage at" stage/offset]
+
+;;=============================================================================
 print as-yellow "^/== An icon"
 ;;=============================================================================
 
@@ -755,7 +812,7 @@ top-at: function [list [block!] point [pair!]][
 	hit
 ]
 
-report: func [event /local type position d hit src][
+report: func [event /local type position d hit src own pixel][
 	type:     event/type
 	position: event/offset
 
@@ -848,8 +905,11 @@ report: func [event /local type position d hit src][
 	;; other than its own, so where on its pixels is worked out from both.
 	if type = 'down [
 		either hit: image-at position [
-			print ["  on" hit "at pixel"
-				(local-of hit position) * hit/image/size / hit/size]
+			;; Its own pixels are its part's, when it shows only a part.
+			own:   either hit/part [hit/part/2][hit/image/size]
+			pixel: (local-of hit position) * own / hit/size
+			if hit/part [pixel: pixel + hit/part/1]
+			print ["  on" hit "at pixel" pixel "of its image"]
 			paint hit/image random 256
 			redraw hit
 			;; On top of everything: itself in its list, and each group
