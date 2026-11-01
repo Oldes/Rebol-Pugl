@@ -4,7 +4,7 @@ Rebol [
 	Purpose: {
 		Basic widgets built of what the extension has: a group, a
 		nine-scaled frame from an atlas and a text - buttons, sliders,
-		text fields and a scroller.
+		text fields, a scroller, check boxes and radio buttons.
 
 		A button is a tracked group - so it is entered, left and pressed
 		as a whole, and a press keeps it until the release - holding its
@@ -27,12 +27,12 @@ if modules-dir: get-env 'REBOL_MODULES_DIR [
 pugl: import 'pugl
 
 ;;=============================================================================
-;; The atlas: five 24x24 frames side by side - the button's, the default
-;; button's, the focus ring, a slider's filled part and a field's - each
-;; nine-scaled by
-;; [3x3 18x18]: square, a
-;; dark face in a light edge, as the button in font-test.r3. Hover, pressed
-;; and disabled are tints of it.
+;; The atlas: 24x24 cells side by side. Five frames - the button's, the
+;; default button's, the focus ring, a slider's filled part and a field's -
+;; each nine-scaled by [3x3 18x18]: square, a dark face in a light edge, as
+;; the button in font-test.r3. Hover, pressed and disabled are tints of it.
+;; Then three marks of 14x14, drawn smooth, shown at their size: a check
+;; mark, a radio button's circle and its dot.
 ;;=============================================================================
 
 cell: 24
@@ -52,12 +52,58 @@ paint-frame: func [
 	]
 ]
 
-atlas: make image! reduce [as-pair cell * 5 cell 0.0.0.0]    ;; transparent
+atlas: make image! reduce [as-pair cell * 8 cell 0.0.0.0]    ;; transparent
 paint-frame atlas 0x0  70.70.90.255 160.160.200.255 2    ;; a button
 paint-frame atlas 24x0 70.70.90.255 120.170.255.255 2    ;; the default one
 paint-frame atlas 48x0 none         120.180.255.255 1    ;; the focus ring
 paint-frame atlas 72x0 80.120.210.255 120.170.255.255 2  ;; a slider's fill
 paint-frame atlas 96x0 22.22.28.255   110.110.140.255 1  ;; a field
+
+;; The marks: each pixel's coverage by a shape, as its alpha.
+box-size: 14
+clamp01: func [v][max 0.0 min 1.0 v]
+rgba: func [c [tuple!] a [number!]][
+	to tuple! reduce [c/1 c/2 c/3  to integer! round 255 * clamp01 a]
+]
+mix: func [a [tuple!] b [tuple!] t [number!]][
+	to tuple! reduce [
+		to integer! round a/1 + (t * (b/1 - a/1))
+		to integer! round a/2 + (t * (b/2 - a/2))
+		to integer! round a/3 + (t * (b/3 - a/3))
+	]
+]
+;; How far a point is from a line segment.
+seg-dist: func [px py ax ay bx by /local dx dy t][
+	dx: bx - ax  dy: by - ay
+	t: clamp01 ((px - ax) * dx + ((py - ay) * dy)) / ((dx * dx) + (dy * dy))
+	square-root ((px - ax - (t * dx)) ** 2) + ((py - ay - (t * dy)) ** 2)
+]
+;; `shade` gives a pixel's centre [color alpha], or none.
+paint-mark: func [img [image!] at [pair!] shade [any-function!] /local c][
+	repeat y box-size [
+		repeat x box-size [
+			if c: shade x - 0.5 y - 0.5 [
+				if c/2 > 0 [img/(at + as-pair x y): rgba c/1 c/2]
+			]
+		]
+	]
+]
+;; a check mark: two strokes
+paint-mark atlas as-pair 5 * cell 0 func [x y /local d][
+	d: min seg-dist x y 3.5 7.5 6 10.5  seg-dist x y 6 10.5 11 4
+	reduce [235.240.255 1.6 - d]
+]
+;; a radio button's circle: a dark disc in a light rim
+paint-mark atlas as-pair 6 * cell 0 func [x y /local d][
+	d: square-root ((x - 7) ** 2) + ((y - 7) ** 2)
+	reduce [mix 22.22.28 110.110.140 clamp01 1 - abs (d - 6)  6.75 - d]
+]
+;; its dot
+paint-mark atlas as-pair 7 * cell 0 func [x y /local d][
+	d: square-root ((x - 7) ** 2) + ((y - 7) ** 2)
+	reduce [120.180.255 3.5 - d]
+]
+mark-part: func [n][reduce [as-pair n * cell 0  as-pair box-size box-size]]
 
 part-of: func [n [integer!]][reduce [as-pair n * cell 0  as-pair cell cell]]
 nine: [3x3 18x18]
@@ -126,6 +172,7 @@ refresh: func [w][
 		slider [refresh-slider w]
 		field  [refresh-field w]
 		scroller [refresh-scroller w]
+		check radio [refresh-choice w]
 	]
 ]
 
@@ -239,6 +286,7 @@ click: func [b][
 		set-enabled disabled-btn b/on?
 		set-text disabled-btn either b/on? ["Enabled"]["Disabled"]
 		set-enabled disabled-sld b/on?
+		set-enabled disabled-chk b/on?
 	]
 	clicks: clicks + 1
 	status/text: ajoin ["Clicked: " b/text "  (" clicks " in all)"]
@@ -661,6 +709,87 @@ scroller-of: function [source][
 ]
 
 ;;=============================================================================
+;; Check boxes and radio buttons
+;;
+;; A box and a label, in one tracked group: a press anywhere on either is
+;; the widget's. A check box is the field's frame with a check mark over
+;; it; a radio button a circle with a dot - one of a set, which one block
+;; holds: choosing one clears the others.
+;;=============================================================================
+
+make-choice: function [
+	"A check box - or with /radio a radio button - in a window or a group"
+	parent [handle!] text [string!] offset [pair!]
+	/radio in-set [block!] "The radio buttons it is one of - it is added"
+	/checked "On to start with"
+][
+	c: make object! append copy widget-base [
+		box: mark: label: text: none
+		on?:    false
+		in-set: none
+	]
+	c/kind: either radio ['radio]['check]
+	c/text: copy text
+	ts: tsize text
+	gap: 6
+	size: as-pair
+		box-size + gap + to integer! round/ceiling ts/x
+		max box-size to integer! round/ceiling ts/y
+	widget-group c parent offset size
+	at: as-pair 0 (size/y - box-size) / 2
+	either radio [
+		c/box:  add-image/part c/group atlas at mark-part 6
+		c/mark: add-image/part c/group atlas at mark-part 7
+		c/in-set: in-set
+		append in-set c
+	][
+		c/box:  add-image/size/part c/group atlas at as-pair box-size box-size part-of 4
+		c/box/nine-scale: nine
+		c/mark: add-image/part c/group atlas at mark-part 5
+	]
+	c/label: add-label c/group c/text as-pair box-size + gap (size/y - ts/y) / 2
+	c/on?: did checked
+	refresh c
+	c
+]
+
+refresh-choice: func [c][
+	c/box/tint: case [
+		not c/enabled?                [110.110.120]
+		all [c/pressed?  c/hover?]    [140.160.220]
+		c/hover?                      [200.220.255]
+		true                          [none]
+	]
+	c/mark/visible?: c/on?
+	c/mark/tint:  either c/enabled? [none][130.130.140]
+	c/label/tint: either c/enabled? [none][130.130.140]
+]
+
+;; A check box flips; a radio button is chosen, the rest of its set cleared.
+choose: func [c][
+	either c/kind = 'radio [
+		foreach o c/in-set [o/on?: same? o c  refresh o]
+		status/text: ajoin ["Chosen: " c/text]
+	][
+		c/on?: not c/on?
+		refresh c
+		status/text: ajoin [c/text ": " either c/on? ["on"]["off"]]
+	]
+]
+
+;; The arrows move the choice through a set, round.
+choose-next: func [c step /local set n][
+	set: c/in-set
+	n: index? find-same set c
+	n: n + step
+	if n > length? set [n: 1]
+	if n < 1 [n: length? set]
+	unless set/:n/enabled? [exit]
+	choose set/:n
+	focus/keyboard set/:n
+]
+
+;;=============================================================================
 print as-yellow "^/== Buttons"
 ;;=============================================================================
 
@@ -775,10 +904,32 @@ sc/hover?: true  refresh sc
 print ["hovered, unlit:  " none? sc/vthumb/tint "(expected true - only a thumb under the pointer is lit)"]
 sc/hover?: false
 
+;;=============================================================================
+print as-yellow "^/== Check boxes and radio buttons"
+;;=============================================================================
+
+bold-chk:     make-choice/checked window "Bold" 440x300
+italic-chk:   make-choice window "Italic" 440x324
+disabled-chk: make-choice window "Underline" 440x348
+set-enabled disabled-chk false
+sizes: copy []
+small-rad:  make-choice/radio window "Small" 560x300 sizes
+medium-rad: make-choice/radio/checked window "Medium" 560x324 sizes
+large-rad:  make-choice/radio window "Large" 560x348 sizes
+
+print ["widgets so far:  " length? widgets "(expected 27 - 17, the scroller and its 3 buttons, these 6)"]
+print ["checked:         " bold-chk/on? bold-chk/mark/visible? "(expected true true)"]
+print ["unchecked:       " italic-chk/on? italic-chk/mark/visible? "(expected false false)"]
+print ["box:             " mold bold-chk/box/part "(expected [96x0 24x24] - the field's)"]
+print ["mark:            " mold bold-chk/mark/part "(expected [120x0 14x14])"]
+print ["one set:         " length? sizes "(expected 3)"]
+print ["chosen:          " medium-rad/on? small-rad/on? large-rad/on? "(expected true false false)"]
+print ["label hit:       " (image-at window bold-chk/group/offset + bold-chk/label/offset + 3x6) == bold-chk/label "(expected true)"]
+print ["disabled tracked:" disabled-chk/group/track? "(expected false)"]
+
 status: add-label window "Click a button, or Tab to one and press Space" 20x418
 status/tint: 170.170.185
 
-print ["fields:          " length? widgets "(expected 17)"]
 print ["empty, hint:     " name-fld/hint/visible? "(expected true)"]
 type-in name-fld #"Ž"  type-in name-fld #"a"
 print ["typed:           " mold name-fld/text {(expected "Ža")} "caret at" name-fld/pos]
@@ -797,6 +948,12 @@ print ["caret in view:   " long-fld/caret/offset/x < long-fld/view/size/x "(expe
 field-key long-fld 'home
 print ["home, unscrolled:" long-fld/shift = 0 long-fld/caret/offset/x = 0 "(expected true true)"]
 print ["caret hidden:    " not name-fld/caret/visible? "(expected true - not focused)"]
+choose italic-chk
+print ["flipped:         " italic-chk/on? italic-chk/mark/visible? "(expected true true)"]
+choose italic-chk
+choose large-rad
+print ["chose another:   " large-rad/on? medium-rad/on? small-rad/on? "(expected true false false)"]
+choose medium-rad
 print ["textures:        " window/textures "(expected 5 - the atlas, the font, the background, the caret, the tile)"]
 
 print {
@@ -824,6 +981,10 @@ and End to the top and the bottom. Nothing shows outside it, and the
 buttons in it are pressed only where they are shown. Only the thumb under
 the pointer lights up, the one dragged darkens. Clicked, it takes the focus
 for the keys without a ring; reached by Tab, it shows one.
+Below it, check boxes - Bold checked, a disabled Underline - and three radio
+buttons, Medium chosen. Click a box or its label; Space does it with the
+focus. A radio button chosen clears the others; with the focus on one, the
+arrow keys move the choice through the set. The toggle enables Underline.
 Tab and Shift-Tab move a blue focus ring over the enabled widgets; Space or
 Enter clicks a focused button, Enter with none focused the default one. A
 click on the background takes the focus away. The line at the bottom says
@@ -866,6 +1027,7 @@ do-events window func [event /local w][
 			if w [
 				;; A click only when released over it again.
 				if all [w/kind = 'button  w/pressed?  w/group/hover?] [click w]
+				if all [find [check radio] w/kind  w/pressed?  w/group/hover?] [choose w]
 				if w/kind = 'scroller [
 					w/drag: none
 					w/over: thumb-at w local-of w event   ;; still over it?
@@ -889,6 +1051,7 @@ do-events window func [event /local w][
 				#" " #"^M" [
 					case [
 						all [focused  focused/kind = 'button] [click focused]
+						all [focused  find [check radio] focused/kind  event/key = #" "] [choose focused]
 						all [focused  focused/kind = 'field  event/key = #"^M"] [
 							status/text: ajoin ["Entered: " mold focused/text]
 						]
@@ -917,6 +1080,12 @@ do-events window func [event /local w][
 					page-down [scroll-by focused as-pair 0 focused/vsize/y]
 					home      [scroll-to focused 0x0]
 					end       [scroll-to focused as-pair focused/pos/x 100000]
+				]
+			]
+			if all [focused  focused/kind = 'radio] [
+				switch event/key [
+					down right [choose-next focused 1]
+					up left    [choose-next focused -1]
 				]
 			]
 			if all [focused  focused/kind = 'slider] [
