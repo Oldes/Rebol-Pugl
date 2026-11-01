@@ -937,6 +937,18 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 			HAS_CODE | Modifier_Bits(e->key.state), code);
 		break; }
 
+	// What a key press TYPES - shifted, composed, from a dead key or an
+	// input method: the character a text field inserts, in `code`. It comes
+	// after its `key`. The control characters some systems type for
+	// Backspace, Tab, Enter, Escape or Ctrl+letter are left out: those are
+	// keys, not text.
+	case PUGL_TEXT: {
+		u32 c = e->text.character;
+		if (c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0)) break;
+		Append_Event(blk, at, pv, EVT_CHAR,
+			HAS_CODE | Modifier_Bits(e->text.state), c);
+		break; }
+
 	case PUGL_FOCUS_IN:
 	case PUGL_FOCUS_OUT:
 		// A release can happen where this window does not see it - over
@@ -972,7 +984,7 @@ static void Convert_Event(REBSER *blk, REBCNT *at, PUGLQEVT *q)
 		break; }
 
 	default:
-		// PUGL_TEXT and the rest are queued but not reported yet.
+		// The rest is queued but not reported yet.
 		break;
 	}
 

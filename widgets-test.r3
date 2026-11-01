@@ -3,7 +3,8 @@ Rebol [
 	Needs:   3.22.10
 	Purpose: {
 		Basic widgets built of what the extension has: a group, a
-		nine-scaled frame from an atlas and a text. For now: buttons.
+		nine-scaled frame from an atlas and a text - buttons, sliders and
+		text fields.
 
 		A button is a tracked group - so it is entered, left and pressed
 		as a whole, and a press keeps it until the release - holding its
@@ -26,8 +27,9 @@ if modules-dir: get-env 'REBOL_MODULES_DIR [
 pugl: import 'pugl
 
 ;;=============================================================================
-;; The atlas: four 24x24 frames side by side - the button's, the default
-;; button's, the focus ring and a slider's filled part - each nine-scaled by
+;; The atlas: five 24x24 frames side by side - the button's, the default
+;; button's, the focus ring, a slider's filled part and a field's - each
+;; nine-scaled by
 ;; [3x3 18x18]: square, a
 ;; dark face in a light edge, as the button in font-test.r3. Hover, pressed
 ;; and disabled are tints of it.
@@ -50,11 +52,12 @@ paint-frame: func [
 	]
 ]
 
-atlas: make image! reduce [as-pair cell * 4 cell 0.0.0.0]    ;; transparent
+atlas: make image! reduce [as-pair cell * 5 cell 0.0.0.0]    ;; transparent
 paint-frame atlas 0x0  70.70.90.255 160.160.200.255 2    ;; a button
 paint-frame atlas 24x0 70.70.90.255 120.170.255.255 2    ;; the default one
 paint-frame atlas 48x0 none         120.180.255.255 1    ;; the focus ring
 paint-frame atlas 72x0 80.120.210.255 120.170.255.255 2  ;; a slider's fill
+paint-frame atlas 96x0 22.22.28.255   110.110.140.255 1  ;; a field
 
 part-of: func [n [integer!]][reduce [as-pair n * cell 0  as-pair cell cell]]
 nine: [3x3 18x18]
@@ -63,7 +66,7 @@ nine: [3x3 18x18]
 print as-yellow "^/== The window and the font"
 ;;=============================================================================
 
-window: open-window/title 420x370 "Widgets"
+window: open-window/title 420x450 "Widgets"
 print ["window scale:    " window/scale]
 
 ;; The size for widgets: 12 units. Sharp on a dense screen too: the 24 px
@@ -121,6 +124,7 @@ refresh: func [w][
 	switch w/kind [
 		button [refresh-button w]
 		slider [refresh-slider w]
+		field  [refresh-field w]
 	]
 ]
 
@@ -129,7 +133,7 @@ refresh: func [w][
 set-enabled: func [w on [logic!]][
 	w/enabled?: on
 	w/group/track?: on
-	w/group/cursor: either on ['hand][none]
+	w/group/cursor: either on [either w/kind = 'field ['caret]['hand]][none]
 	unless on [
 		w/hover?: w/pressed?: false
 		if same? focused w [focus none]
@@ -137,10 +141,14 @@ set-enabled: func [w on [logic!]][
 	refresh w
 ]
 
-focus: func [w][
-	if focused [focused/ring/visible?: false]
+focus: func [w /local old][
+	old: focused
+	if old [old/ring/visible?: false]
 	focused: w
 	if w [w/ring/visible?: true]
+	;; a field shows its caret only while it has the focus
+	if all [old  old/kind = 'field] [update-field old]
+	if all [w  w/kind = 'field] [update-field w]
 ]
 
 ;; Tab and Shift-Tab: the next or the previous enabled one.
@@ -367,6 +375,120 @@ refresh-slider: func [s][
 ]
 
 ;;=============================================================================
+;; Text fields
+;;
+;; A dark frame with the text in a clipped group inside it, so a long text
+;; is cut at the edges and scrolled to keep the caret in view. The caret is
+;; a 1-unit wide line, shown while the field has the focus. What is typed
+;; comes as `char` events - shifted, composed, accented; the keys move the
+;; caret and delete. No selection yet.
+;;=============================================================================
+
+field-pad: 5      ;; between the frame and the text
+caret-img: make image! [1x1 255.255.255]
+
+make-field: function [
+	"A one-line text field in a window or a group"
+	parent [handle!] offset [pair!] size [pair!]
+	/with  t [string!] "Its text to start with"
+	/hint  h [string!] "Shown while it is empty"
+	/secure "Shows a star for each character"
+][
+	f: make object! append copy widget-base [
+		face: view: label: hint: caret: none
+		text:    none
+		pos:     0       ;; the caret: how many characters are before it
+		shift:   0       ;; how far the text is scrolled left, in units
+		secure?: false
+		size:    none
+	]
+	f/kind:    'field
+	f/text:    copy any [t ""]
+	f/pos:     length? f/text
+	f/size:    size
+	f/secure?: did secure
+	widget-group f parent offset size
+	f/group/cursor: 'caret
+	f/face: add-image/size/part f/group atlas 0x0 size part-of 4
+	f/face/nine-scale: nine
+	;; The viewport: clipped to the inside of the frame.
+	f/view: add-group/size f/group as-pair field-pad 0 as-pair size/x - (2 * field-pad) size/y
+	th: tsize "Xg"
+	ty: (size/y - th/y) / 2
+	f/hint:  add-label f/view any [h ""] as-pair 0 ty
+	f/hint/tint: 110.110.125
+	f/label: add-label f/view "" as-pair 0 ty
+	f/caret: add-image/size f/view caret-img 0x3 as-pair 1 size/y - 6
+	update-field f
+	refresh f
+	f
+]
+
+;; What it shows: the text, or a star for each character.
+shown-text: func [f][
+	either f/secure? [append/dup copy "" #"*" length? f/text][f/text]
+]
+
+;; Where the caret is before character `n + 1`, from the text's start.
+caret-x: func [f n /local sz][
+	sz: tsize copy/part shown-text f n
+	sz/x
+]
+
+;; The text, the hint, the caret - and scrolled so the caret is in view,
+;; with no empty room at the end while the text is longer than the field.
+update-field: func [f /local x w end][
+	f/label/text: shown-text f
+	f/hint/visible?: empty? f/text
+	x:   caret-x f f/pos
+	w:   f/view/size/x - 1
+	end: caret-x f length? f/text
+	if x - f/shift > w [f/shift: x - w]
+	if x - f/shift < 0 [f/shift: x]
+	if end - f/shift < w [f/shift: max 0 end - w]
+	f/label/offset: as-pair negate f/shift f/label/offset/y
+	f/caret/offset: as-pair x - f/shift 3
+	f/caret/visible?: same? focused f
+]
+
+;; The caret to the gap nearest to `x` - units from the viewport's corner.
+caret-to: func [f x /local n len][
+	x: x + f/shift
+	n: 0
+	len: length? f/text
+	while [all [n < len  ((caret-x f n) + (caret-x f n + 1)) / 2 < x]][n: n + 1]
+	f/pos: n
+	update-field f
+]
+
+type-in: func [f c [char!]][
+	insert skip f/text f/pos c
+	f/pos: f/pos + 1
+	update-field f
+]
+
+field-key: func [f key [word!]][
+	switch key [
+		left      [if f/pos > 0 [f/pos: f/pos - 1]]
+		right     [if f/pos < length? f/text [f/pos: f/pos + 1]]
+		home up   [f/pos: 0]
+		end down  [f/pos: length? f/text]
+		backspace [if f/pos > 0 [f/pos: f/pos - 1  remove skip f/text f/pos]]
+		delete    [if f/pos < length? f/text [remove skip f/text f/pos]]
+	]
+	update-field f
+]
+
+refresh-field: func [f][
+	f/face/tint: case [
+		not f/enabled? [110.110.120]
+		f/hover?       [200.215.255]
+		true           [none]
+	]
+	f/label/tint: either f/enabled? [none][130.130.140]
+]
+
+;;=============================================================================
 print as-yellow "^/== Buttons"
 ;;=============================================================================
 
@@ -414,8 +536,6 @@ disabled-sld: make-slider/value/show window 20x250 240x16 30%
 set-enabled disabled-sld false
 upright: make-slider/value/show window 360x186 16x110 75%
 
-status: add-label window "Click a button, or Tab to one and press Space" 20x340
-status/tint: 170.170.185
 
 print ["sliders:         " length? widgets "(expected 14)"]
 print ["value:           " volume/value "(expected 0.5)"]
@@ -431,7 +551,38 @@ print ["vertical:        " upright/vertical? "(expected true)"]
 print ["its knob at:     " upright/knob/offset "(expected 0x25 - a quarter of 110 - 12, rounded)"]
 print ["value at middle: " value-at volume 120x8 "(expected 0.5)"]
 print ["value at bottom: " value-at upright 8x104 "(expected 0.0)"]
-print ["textures:        " window/textures "(expected 3 - the atlas, the font, the background)"]
+
+;;=============================================================================
+print as-yellow "^/== Text fields"
+;;=============================================================================
+
+name-fld:  make-field/hint window 20x310 240x22 "Your name"
+pass-fld:  make-field/secure/hint window 20x342 240x22 "Password"
+long-fld:  make-field/with window 20x374 240x22 "A text longer than the field, so it is scrolled to its end"
+
+status: add-label window "Click a button, or Tab to one and press Space" 20x418
+status/tint: 170.170.185
+
+print ["fields:          " length? widgets "(expected 17)"]
+print ["empty, hint:     " name-fld/hint/visible? "(expected true)"]
+type-in name-fld #"Ž"  type-in name-fld #"a"
+print ["typed:           " mold name-fld/text {(expected "Ža")} "caret at" name-fld/pos]
+print ["hint gone:       " not name-fld/hint/visible? "(expected true)"]
+print ["caret after it:  " name-fld/caret/offset/x = caret-x name-fld 2 "(expected true)"]
+field-key name-fld 'left  type-in name-fld #"l"
+print ["inserted:        " mold name-fld/text {(expected "Žla")}]
+field-key name-fld 'backspace  field-key name-fld 'delete
+print ["deleted:         " mold name-fld/text {(expected "Ž")}]
+field-key name-fld 'backspace
+print ["empty again:     " mold name-fld/text name-fld/hint/visible? {(expected "" true)}]
+foreach c "abc" [type-in pass-fld c]
+print ["secure shows:    " mold pass-fld/label/text {(expected "***")} "keeps" mold pass-fld/text]
+print ["long, scrolled:  " long-fld/shift > 0 "(expected true)"]
+print ["caret in view:   " long-fld/caret/offset/x < long-fld/view/size/x "(expected true)"]
+field-key long-fld 'home
+print ["home, unscrolled:" long-fld/shift = 0 long-fld/caret/offset/x = 0 "(expected true true)"]
+print ["caret hidden:    " not name-fld/caret/visible? "(expected true - not focused)"]
+print ["textures:        " window/textures "(expected 4 - the atlas, the font, the background, the caret)"]
 
 print {
 WATCH: dark buttons with light edges, as in font-test.r3 - three of one
@@ -445,6 +596,11 @@ one at 75%. Press anywhere on one and drag: the knob's middle follows the
 pointer, also off the slider, the blue part up to it. The wheel over one
 moves it a step; so do the arrow keys when it has the focus - Home and End
 to the ends, Page Up and Down by a quarter.
+At the bottom, text fields: an empty one with a grey hint, a password one,
+and one with a long text, scrolled to its end. Click one - the caret goes to
+the nearest gap - and type: Shift, accents and dead keys too. Left, Right,
+Home and End (Up and Down too) move the caret, Backspace and Delete delete;
+the text scrolls to keep the caret in view. Enter reports the text.
 Tab and Shift-Tab move a blue focus ring over the enabled widgets; Space or
 Enter clicks a focused button, Enter with none focused the default one. A
 click on the background takes the focus away. The line at the bottom says
@@ -460,6 +616,7 @@ do-events window func [event /local w][
 			either w [
 				w/pressed?: true  focus w  refresh w
 				if w/kind = 'slider [slide w value-at w local-of w event]
+				if w/kind = 'field  [caret-to w (pick local-of w event 1) - field-pad]
 			][focus none]
 		]
 		;; While pressed, the moves come from what took the press, wherever
@@ -487,16 +644,24 @@ do-events window func [event /local w][
 				#" " #"^M" [
 					case [
 						all [focused  focused/kind = 'button] [click focused]
+						all [focused  focused/kind = 'field  event/key = #"^M"] [
+							status/text: ajoin ["Entered: " mold focused/text]
+						]
 						all [not focused  event/key = #"^M"]  [click default-btn]
 					]
 				]
 			]
+		]
+		;; What is typed - into the focused field.
+		char [
+			if all [focused  focused/kind = 'field] [type-in focused to char! event/code]
 		]
 		named-key [
 			switch event/key [
 				backtab [focus-next -1]
 				escape  [close-window window]
 			]
+			if all [focused  focused/kind = 'field] [field-key focused event/key]
 			if all [focused  focused/kind = 'slider] [
 				switch event/key [
 					right up    [nudge focused 1]
