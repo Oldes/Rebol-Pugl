@@ -3,8 +3,8 @@ Rebol [
 	Needs:   3.22.10
 	Purpose: {
 		Basic widgets built of what the extension has: a group, a
-		nine-scaled frame from an atlas and a text - buttons, sliders and
-		text fields.
+		nine-scaled frame from an atlas and a text - buttons, sliders,
+		text fields and a scroller.
 
 		A button is a tracked group - so it is entered, left and pressed
 		as a whole, and a press keeps it until the release - holding its
@@ -66,7 +66,7 @@ nine: [3x3 18x18]
 print as-yellow "^/== The window and the font"
 ;;=============================================================================
 
-window: open-window/title 420x450 "Widgets"
+window: open-window/title 680x450 "Widgets"
 print ["window scale:    " window/scale]
 
 ;; The size for widgets: 12 units. Sharp on a dense screen too: the 24 px
@@ -125,6 +125,7 @@ refresh: func [w][
 		button [refresh-button w]
 		slider [refresh-slider w]
 		field  [refresh-field w]
+		scroller [refresh-scroller w]
 	]
 ]
 
@@ -141,11 +142,13 @@ set-enabled: func [w on [logic!]][
 	refresh w
 ]
 
-focus: func [w /local old][
+;; The ring shows where the focus is - but around a scroller, a big area
+;; clicked into to scroll it, only when it was reached by Tab.
+focus: func [w /keyboard "Reached by Tab or Shift-Tab" /local old][
 	old: focused
 	if old [old/ring/visible?: false]
 	focused: w
-	if w [w/ring/visible?: true]
+	if w [w/ring/visible?: did any [keyboard  w/kind <> 'scroller]]
 	;; a field shows its caret only while it has the focus
 	if all [old  old/kind = 'field] [update-field old]
 	if all [w  w/kind = 'field] [update-field w]
@@ -161,7 +164,7 @@ focus-next: function [step [integer!]][
 	n: n + step
 	if n > length? live [n: 1]
 	if n < 1 [n: length? live]
-	focus live/:n
+	focus/keyboard live/:n
 ]
 
 find-widget: func [source][
@@ -489,6 +492,175 @@ refresh-field: func [f][
 ]
 
 ;;=============================================================================
+;; Scrollers
+;;
+;; A box showing a part of a bigger content: a clipped group - the view -
+;; with the content group in it, moved by minus the position. Scroll bars
+;; where the content does not fit: a track and a thumb, drawn by the
+;; scroller's own group, which is tracked - so a press on a bar is the
+;; scroller's, and its drag too. What is in the content is anything:
+;; widgets in it work as anywhere else, hit only where they are shown.
+;;=============================================================================
+
+bar: 10           ;; the scroll bars' thickness
+thumb-min: 16     ;; the shortest a thumb gets
+
+make-scroller: function [
+	"A scroller in a window or a group; add to its `content` group"
+	parent [handle!] offset [pair!] size [pair!]
+	content-size [pair!] "How big what it will show is"
+][
+	s: make object! append copy widget-base [
+		view: content: vtrack: vthumb: htrack: hthumb: corner: none
+		pos:   0x0    ;; the content's point at the view's top-left
+		size:  none   ;; all of it, bars included
+		csize: none   ;; the content's
+		vsize: none   ;; the view's: without the bars
+		drag:  none   ;; v or h, while a thumb is dragged
+		over:  none   ;; v or h, while the pointer is over a thumb
+		grab:  0      ;; where on the thumb it was taken
+	]
+	s/kind:  'scroller
+	s/size:  size
+	s/csize: content-size
+	widget-group s parent offset size
+	s/group/cursor: 'arrow
+	;; A bar takes room, which can make the other one needed too.
+	need-v: need-h: false
+	loop 2 [
+		need-v: content-size/y > (size/y - either need-h [bar][0])
+		need-h: content-size/x > (size/x - either need-v [bar][0])
+	]
+	s/vsize: size - as-pair either need-v [bar][0] either need-h [bar][0]
+	s/view: add-group/size s/group 0x0 s/vsize
+	s/content: add-group s/view 0x0
+	if need-v [
+		s/vtrack: add-image/size/part s/group atlas as-pair s/vsize/x 0 as-pair bar s/vsize/y part-of 4
+		s/vthumb: add-image/size/part s/group atlas as-pair s/vsize/x 0 as-pair bar thumb-min part-of 0
+	]
+	if need-h [
+		s/htrack: add-image/size/part s/group atlas as-pair 0 s/vsize/y as-pair s/vsize/x bar part-of 4
+		s/hthumb: add-image/size/part s/group atlas as-pair 0 s/vsize/y as-pair thumb-min bar part-of 0
+	]
+	if all [need-v need-h] [
+		s/corner: add-image/size/part s/group atlas s/vsize as-pair bar bar part-of 4
+	]
+	foreach img reduce [s/vtrack s/vthumb s/htrack s/hthumb s/corner] [
+		if img [img/nine-scale: nine]
+	]
+	scroll-to s 0x0
+	refresh s
+	s
+]
+
+;; How far it can go.
+scroll-max: func [s][max 0x0 s/csize - s/vsize]
+
+;; Shows the content from `p`, clamped; the thumbs follow.
+scroll-to: function [s p [pair!]][
+	most: scroll-max s
+	s/pos: as-pair (max 0 min most/x p/x) (max 0 min most/y p/y)
+	s/content/offset: negate s/pos
+	if s/vthumb [
+		len: max thumb-min to integer! s/vsize/y * s/vsize/y / s/csize/y
+		at: either most/y > 0 [to integer! round (s/vsize/y - len) * s/pos/y / most/y][0]
+		s/vthumb/size:   as-pair bar len
+		s/vthumb/offset: as-pair s/vsize/x at
+	]
+	if s/hthumb [
+		len: max thumb-min to integer! s/vsize/x * s/vsize/x / s/csize/x
+		at: either most/x > 0 [to integer! round (s/vsize/x - len) * s/pos/x / most/x][0]
+		s/hthumb/size:   as-pair len bar
+		s/hthumb/offset: as-pair at s/vsize/y
+	]
+]
+
+scroll-by: func [s d [pair!]][scroll-to s s/pos + d]
+
+;; A press at `p` - from its corner: on a thumb it is taken; on a track
+;; elsewhere, the view moves by a page towards it.
+press-scroller: function [s p [pair!]][
+	if all [s/vthumb  p/x >= s/vsize/x  p/y < s/vsize/y] [
+		t: s/vthumb
+		either all [p/y >= t/offset/y  p/y < (t/offset/y + t/size/y)] [
+			s/drag: 'v  s/grab: p/y - t/offset/y
+		][
+			scroll-by s as-pair 0 either p/y < t/offset/y [negate s/vsize/y][s/vsize/y]
+		]
+	]
+	if all [s/hthumb  p/y >= s/vsize/y  p/x < s/vsize/x] [
+		t: s/hthumb
+		either all [p/x >= t/offset/x  p/x < (t/offset/x + t/size/x)] [
+			s/drag: 'h  s/grab: p/x - t/offset/x
+		][
+			scroll-by s as-pair either p/x < t/offset/x [negate s/vsize/x][s/vsize/x] 0
+		]
+	]
+]
+
+;; A thumb dragged to where the pointer is, keeping where it was taken.
+drag-scroller: function [s p [pair!]][
+	most: scroll-max s
+	switch s/drag [
+		v [
+			room: s/vsize/y - s/vthumb/size/y
+			if room > 0 [scroll-to s as-pair s/pos/x (p/y - s/grab) * most/y / room]
+		]
+		h [
+			room: s/vsize/x - s/hthumb/size/x
+			if room > 0 [scroll-to s as-pair (p/x - s/grab) * most/x / room s/pos/y]
+		]
+	]
+]
+
+;; Only the thumb taken, or the one under the pointer, is lit.
+refresh-scroller: func [s /local tint-of][
+	tint-of: func [bar][
+		case [
+			s/drag = bar [140.160.220]
+			all [not s/drag  s/over = bar] [200.220.255]
+			true         [none]
+		]
+	]
+	if s/vthumb [s/vthumb/tint: tint-of 'v]
+	if s/hthumb [s/hthumb/tint: tint-of 'h]
+]
+
+;; Which thumb is at `p` - from the scroller's corner: v, h or none.
+thumb-at: func [s p [pair!] /local in?][
+	in?: func [t][
+		all [t  p/x >= t/offset/x  p/y >= t/offset/y
+			p/x < (t/offset/x + t/size/x)  p/y < (t/offset/y + t/size/y)]
+	]
+	case [
+		in? s/vthumb ['v]
+		in? s/hthumb ['h]
+		true         [none]
+	]
+]
+
+;; The pointer moved: a scroller under it lights the thumb under it. The
+;; scroller is entered as a whole, so this is asked of every move over it.
+hover-thumbs: func [event /local o][
+	foreach w widgets [
+		if w/kind = 'scroller [
+			o: either w/hover? [thumb-at w local-of w event][none]
+			if o <> w/over [w/over: o  refresh w]
+		]
+	]
+]
+
+;; The scroller a scroll is for: a scroll over a button in one comes from
+;; the button - tracked, it is the innermost - and goes to its scroller.
+scroller-of: function [source][
+	while [all [source  find [pugl-image pugl-group pugl-text] source/type]][
+		if all [w: find-widget source  find [scroller slider] w/kind] [return w]
+		source: source/parent
+	]
+	none
+]
+
+;;=============================================================================
 print as-yellow "^/== Buttons"
 ;;=============================================================================
 
@@ -560,6 +732,49 @@ name-fld:  make-field/hint window 20x310 240x22 "Your name"
 pass-fld:  make-field/secure/hint window 20x342 240x22 "Password"
 long-fld:  make-field/with window 20x374 240x22 "A text longer than the field, so it is scrolled to its end"
 
+
+;;=============================================================================
+print as-yellow "^/== A scroller"
+;;=============================================================================
+
+sc: make-scroller window 440x20 220x260 480x520
+;; Its content: a pattern, lines of text, and buttons - one below the view.
+tile: make image! 32x32
+repeat y 32 [repeat x 32 [
+	tile/(as-pair x y): either odd? (to integer! x - 1 / 16) + (to integer! y - 1 / 16) [44.44.56][36.36.46]
+]]
+pattern: add-image/size sc/content tile 0x0 480x520
+pattern/fill: 'tile
+repeat i 10 [
+	add-label sc/content ajoin ["Line " i " - the wheel, the bars or the keys move it"] as-pair 10 i * 50 - 32
+]
+inside-1: make-button sc/content "Inside" 20x70 80x22
+inside-2: make-button sc/content "Far right" 380x200 80x22
+inside-3: make-button sc/content "At the bottom" 20x490 0x0
+
+print ["view, without bars:" sc/vsize "(expected 210x250)"]
+print ["thumbs:          " sc/vthumb/size sc/hthumb/size "(expected 10x120 91x10)"]
+print ["can scroll:      " scroll-max sc "(expected 270x270)"]
+scroll-to sc 0x10000
+print ["clamped:         " sc/pos "(expected 0x270)"]
+print ["content moved:   " sc/content/offset "(expected 0x-270)"]
+print ["thumb at bottom: " sc/vthumb/offset "(expected 210x130)"]
+scroll-to sc 0x0
+print ["bar over content:" (image-at window 655x220) == sc/vtrack "(expected true - the content is clipped under it)"]
+print ["button inside:   " (image-at window 440x20 + 23x73) == inside-1/face "(expected true)"]
+print ["scroller of it:  " same? scroller-of inside-1/group sc "(expected true)"]
+focus sc
+print ["clicked, no ring:" not sc/ring/visible? "(expected true - focused, but not by Tab)"]
+focus/keyboard sc
+print ["by Tab, a ring:  " sc/ring/visible? "(expected true)"]
+focus ok-btn
+print ["a button's ring: " ok-btn/ring/visible? "(expected true - clicked or not)"]
+focus none
+print ["thumb at:        " thumb-at sc 215x10 thumb-at sc 215x200 thumb-at sc 10x255 "(expected v none h)"]
+sc/hover?: true  refresh sc
+print ["hovered, unlit:  " none? sc/vthumb/tint "(expected true - only a thumb under the pointer is lit)"]
+sc/hover?: false
+
 status: add-label window "Click a button, or Tab to one and press Space" 20x418
 status/tint: 170.170.185
 
@@ -582,7 +797,7 @@ print ["caret in view:   " long-fld/caret/offset/x < long-fld/view/size/x "(expe
 field-key long-fld 'home
 print ["home, unscrolled:" long-fld/shift = 0 long-fld/caret/offset/x = 0 "(expected true true)"]
 print ["caret hidden:    " not name-fld/caret/visible? "(expected true - not focused)"]
-print ["textures:        " window/textures "(expected 4 - the atlas, the font, the background, the caret)"]
+print ["textures:        " window/textures "(expected 5 - the atlas, the font, the background, the caret, the tile)"]
 
 print {
 WATCH: dark buttons with light edges, as in font-test.r3 - three of one
@@ -601,6 +816,14 @@ and one with a long text, scrolled to its end. Click one - the caret goes to
 the nearest gap - and type: Shift, accents and dead keys too. Left, Right,
 Home and End (Up and Down too) move the caret, Backspace and Delete delete;
 the text scrolls to keep the caret in view. Enter reports the text.
+Right, a scroller over a bigger checkered content with lines of text and
+three buttons, one far right and one at the bottom. The wheel over it - or
+over a button in it - scrolls; drag a thumb, or press a track beside it to
+move by a page. Focused, arrows scroll it, Page Up and Down by a page, Home
+and End to the top and the bottom. Nothing shows outside it, and the
+buttons in it are pressed only where they are shown. Only the thumb under
+the pointer lights up, the one dragged darkens. Clicked, it takes the focus
+for the keys without a ring; reached by Tab, it shows one.
 Tab and Shift-Tab move a blue focus ring over the enabled widgets; Space or
 Enter clicks a focused button, Enter with none focused the default one. A
 click on the background takes the focus away. The line at the bottom says
@@ -611,12 +834,21 @@ do-events window func [event /local w][
 	w: find-widget event/source
 	switch event/type [
 		enter [if w [w/hover?: true   refresh w]]
-		leave [if w [w/hover?: false  refresh w]]
+		leave [
+			if w [
+				w/hover?: false
+				if w/kind = 'scroller [w/over: none]
+				refresh w
+			]
+		]
 		down  [
 			either w [
 				w/pressed?: true  focus w  refresh w
 				if w/kind = 'slider [slide w value-at w local-of w event]
 				if w/kind = 'field  [caret-to w (pick local-of w event 1) - field-pad]
+				if w/kind = 'scroller [press-scroller w local-of w event  refresh w]
+				;; a page jump moved the thumb: under the pointer now, or not
+				if w/kind = 'scroller [w/over: thumb-at w local-of w event  refresh w]
 			][focus none]
 		]
 		;; While pressed, the moves come from what took the press, wherever
@@ -625,18 +857,31 @@ do-events window func [event /local w][
 			if all [w  w/pressed?  w/kind = 'slider] [
 				slide w value-at w local-of w event
 			]
+			if all [w  w/pressed?  w/kind = 'scroller] [
+				drag-scroller w local-of w event
+			]
+			hover-thumbs event
 		]
 		up    [
 			if w [
 				;; A click only when released over it again.
 				if all [w/kind = 'button  w/pressed?  w/group/hover?] [click w]
+				if w/kind = 'scroller [
+					w/drag: none
+					w/over: thumb-at w local-of w event   ;; still over it?
+				]
 				w/pressed?: false
 				refresh w
 			]
 		]
-		;; The wheel over a slider: up for more.
+		;; The wheel over a slider: up for more. Over a scroller, or what is
+		;; in it: up shows what is above.
 		scroll-line [
-			if all [w  w/kind = 'slider] [nudge w event/code]
+			if w: scroller-of event/source [
+				either w/kind = 'slider [nudge w event/code][
+					scroll-by w as-pair 0 -40 * event/code
+				]
+			]
 		]
 		key   [
 			switch event/key [
@@ -662,6 +907,18 @@ do-events window func [event /local w][
 				escape  [close-window window]
 			]
 			if all [focused  focused/kind = 'field] [field-key focused event/key]
+			if all [focused  focused/kind = 'scroller] [
+				switch event/key [
+					up        [scroll-by focused 0x-20]
+					down      [scroll-by focused 0x20]
+					left      [scroll-by focused -20x0]
+					right     [scroll-by focused 20x0]
+					page-up   [scroll-by focused as-pair 0 negate focused/vsize/y]
+					page-down [scroll-by focused as-pair 0 focused/vsize/y]
+					home      [scroll-to focused 0x0]
+					end       [scroll-to focused as-pair focused/pos/x 100000]
+				]
+			]
 			if all [focused  focused/kind = 'slider] [
 				switch event/key [
 					right up    [nudge focused 1]
