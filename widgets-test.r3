@@ -195,6 +195,12 @@ print ["a button's ring: " ok-btn/ring/visible? "(expected true - clicked or not
 ui/focus none
 print ["thumb at:        " ui/thumb-at sc 215x10 ui/thumb-at sc 215x200 ui/thumb-at sc 10x255 "(expected v none h)"]
 sc/hover?: true  ui/refresh sc
+ui/scroll-to sc 100x100
+ui/resize-scroller sc 220x260 200x200
+print ["fits, no bars:   " none? sc/vthumb none? sc/hthumb sc/vsize sc/pos "(expected true true 220x260 0x0)"]
+ui/resize-scroller sc 220x260 480x520
+print ["bars again:      " sc/vthumb/size sc/hthumb/size "(expected 10x120 91x10)"]
+print ["above the view:  " (image-at window 655x220) == sc/vtrack "(expected true)"]
 print ["hovered, unlit:  " none? sc/vthumb/tint "(expected true - only a thumb under the pointer is lit)"]
 sc/hover?: false
 

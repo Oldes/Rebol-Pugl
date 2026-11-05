@@ -632,15 +632,39 @@ make object! [
 		s/csize: content-size
 		widget-group s parent offset size
 		s/group/cursor: 'arrow
-		;; A bar takes room, which can make the other one needed too.
+		s/view: add-group/size s/group 0x0 size
+		s/content: add-group s/view 0x0
+		layout-scroller s
+		s
+	]
+
+	resize-scroller: func [
+		"A scroller's new size - and its content's, unless none; the position is kept where it can be"
+		s size [pair!] content-size [pair! none!]
+	][
+		s/size: size
+		if content-size [s/csize: content-size]
+		layout-scroller s
+	]
+
+	;; The view and the bars for its size and its content's: a bar takes
+	;; room, which can make the other one needed too. The bars are made
+	;; anew - after the view, so above it.
+	layout-scroller: function [s][
+		foreach img reduce [s/vtrack s/vthumb s/htrack s/hthumb s/corner] [
+			if img [remove-image img]
+		]
+		s/vtrack: s/vthumb: s/htrack: s/hthumb: s/corner: none
+		size: s/size
+		content-size: s/csize
 		need-v: need-h: false
 		loop 2 [
 			need-v: content-size/y > (size/y - either need-h [bar][0])
 			need-h: content-size/x > (size/x - either need-v [bar][0])
 		]
 		s/vsize: size - as-pair either need-v [bar][0] either need-h [bar][0]
-		s/view: add-group/size s/group 0x0 s/vsize
-		s/content: add-group s/view 0x0
+		s/view/size: s/vsize
+		s/ring/size: size + 4x4
 		if need-v [
 			s/vtrack: add-image/size/part s/group atlas as-pair s/vsize/x 0 as-pair bar s/vsize/y part-of 4
 			s/vthumb: add-image/size/part s/group atlas as-pair s/vsize/x 0 as-pair bar thumb-min part-of 0
@@ -655,9 +679,11 @@ make object! [
 		foreach img reduce [s/vtrack s/vthumb s/htrack s/hthumb s/corner] [
 			if img [img/nine-scale: nine]
 		]
-		scroll-to s 0x0
+		;; A bar gone takes its drag and its light with it.
+		unless s/vthumb [if s/drag = 'v [s/drag: none]  if s/over = 'v [s/over: none]]
+		unless s/hthumb [if s/drag = 'h [s/drag: none]  if s/over = 'h [s/over: none]]
+		scroll-to s s/pos   ;; clamped to the new room
 		refresh s
-		s
 	]
 
 	;; How far it can go.
