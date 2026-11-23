@@ -1,4 +1,4 @@
-[![Rebol-Pugl CI](https://github.com/Oldes/Rebol-Pugl/actions/workflows/main.yml/badge.svg)](https://github.com/Oldes/Rebol-Pugl/actions/workflows/main.yml)
+[![rebol-gui](https://github.com/user-attachments/assets/9f087ffe-3dec-4234-8ef9-a5a0aed4df66)](https://github.com/Oldes/Rebol-GUI)
 
 # Rebol/Pugl
 
